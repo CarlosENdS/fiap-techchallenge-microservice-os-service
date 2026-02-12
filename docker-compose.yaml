@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  os-service:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: os-service
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://os-db:5432/os_service_db
+      - SPRING_DATASOURCE_USERNAME=os_service_user
+      - SPRING_DATASOURCE_PASSWORD=os_service_password
+      - CLOUD_AWS_REGION_STATIC=us-east-1
+      - CLOUD_AWS_SQS_ENDPOINT=http://localstack:4566
+      - CLOUD_AWS_CREDENTIALS_ACCESS_KEY=test
+      - CLOUD_AWS_CREDENTIALS_SECRET_KEY=test
+      - SQS_OS_EVENTS_QUEUE_URL=http://localstack:4566/000000000000/os-order-events-queue.fifo
+      - SQS_QUOTE_APPROVED_QUEUE=quote-approved-queue
+      - SQS_EXECUTION_COMPLETED_QUEUE=execution-completed-queue
+      - SQS_PAYMENT_FAILED_QUEUE=payment-failed-queue
+      - SQS_RESOURCE_UNAVAILABLE_QUEUE=resource-unavailable-queue
+    depends_on:
+      os-db:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - os-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  os-db:
+    image: postgres:16-alpine
+    container_name: os-db
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=os_service_db
+      - POSTGRES_USER=os_service_user
+      - POSTGRES_PASSWORD=os_service_password
+    volumes:
+      - os-db-data:/var/lib/postgresql/data
+      - ./database/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - os-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U os_service_user -d os_service_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:3.4
+    container_name: os-localstack
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"
+    environment:
+      - SERVICES=sqs
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh
+    networks:
+      - os-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  os-network:
+    driver: bridge
+
+volumes:
+  os-db-data:
+  localstack-data:
