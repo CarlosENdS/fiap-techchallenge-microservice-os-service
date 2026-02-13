@@ -18,8 +18,11 @@ import io.swagger.v3.oas.models.servers.Server;
 @Configuration
 public class OpenApiConfiguration {
 
-    @Value("${server.port:8081}")
+    @Value("${server.port:8080}")
     private String serverPort;
+
+    @Value("${server.servlet.context-path:}")
+    private String contextPath;
 
     @Bean
     public OpenAPI customOpenAPI() {
@@ -50,7 +53,7 @@ public class OpenApiConfiguration {
                                 .url("https://www.apache.org/licenses/LICENSE-2.0")))
                 .servers(List.of(
                         new Server()
-                                .url("http://localhost:" + serverPort)
+                                .url("http://localhost:" + serverPort + contextPath)
                                 .description("Local Development Server")));
     }
 }

@@ -8,6 +8,7 @@ Microserviço para gerenciamento de Ordens de Serviço (OS) do sistema Car Garag
 - [Arquitetura](#-arquitetura)
 - [Tecnologias](#-tecnologias)
 - [Estrutura do Projeto](#-estrutura-do-projeto)
+- [Modelo ER do Banco](#-modelo-er-do-banco)
 - [Workflow de Status](#-workflow-de-status)
 - [Saga Pattern](#-saga-pattern)
 - [API Endpoints](#-api-endpoints)
@@ -162,6 +163,57 @@ fiap-techchallenge-microservice-os-service/
 └── README.md
 ```
 
+## 🗄 Modelo ER do Banco
+
+O banco local é inicializado por script em `database/init-scripts/00-init-database.sql` com schema e dados fake.
+
+```mermaid
+erDiagram
+       SERVICE_ORDER ||--o{ SERVICE_ORDER_ITEM : has
+       SERVICE_ORDER ||--o{ SERVICE_ORDER_RESOURCE : has
+
+       SERVICE_ORDER {
+              BIGINT id PK
+              BIGINT customer_id
+              VARCHAR customer_name
+              BIGINT vehicle_id
+              VARCHAR vehicle_license_plate
+              VARCHAR vehicle_model
+              VARCHAR vehicle_brand
+              TEXT description
+              VARCHAR status
+              NUMERIC total_price
+              TIMESTAMP created_at
+              TIMESTAMP updated_at
+              TIMESTAMP approved_at
+              TIMESTAMP finished_at
+              TIMESTAMP delivered_at
+       }
+
+       SERVICE_ORDER_ITEM {
+              BIGINT id PK
+              BIGINT order_id FK
+              BIGINT service_id
+              VARCHAR service_name
+              TEXT service_description
+              INTEGER quantity
+              NUMERIC price
+              NUMERIC total_price
+       }
+
+       SERVICE_ORDER_RESOURCE {
+              BIGINT id PK
+              BIGINT order_id FK
+              BIGINT resource_id
+              VARCHAR resource_name
+              TEXT resource_description
+              VARCHAR resource_type
+              INTEGER quantity
+              NUMERIC price
+              NUMERIC total_price
+       }
+```
+
 ## 🔄 Workflow de Status
 
 A Ordem de Serviço segue um fluxo de estados bem definido:
@@ -235,6 +287,8 @@ Os eventos são publicados na fila FIFO `os-order-events-queue.fifo` no AWS SQS:
 | Payment Failed | `payment-failed-queue` | Cancela a OS |
 | Resource Unavailable | `resource-unavailable-queue` | Cancela a OS |
 
+Consulte os contratos e formatos de mensagem em [docs/QUEUE_CONTRACT.md](docs/QUEUE_CONTRACT.md).
+
 ### Diagrama de Sequência - Saga
 
 ```
@@ -270,17 +324,16 @@ Os eventos são publicados na fila FIFO `os-order-events-queue.fifo` no AWS SQS:
 
 | Método | Endpoint | Descrição |
 |--------|----------|-----------|
-| `POST` | `/api/v1/service-orders` | Criar nova OS |
-| `GET` | `/api/v1/service-orders` | Listar todas as OS |
-| `GET` | `/api/v1/service-orders/{id}` | Obter OS por ID |
-| `PUT` | `/api/v1/service-orders/{id}` | Atualizar OS |
-| `PATCH` | `/api/v1/service-orders/{id}/status` | Atualizar status |
-| `POST` | `/api/v1/service-orders/{id}/approval` | Processar aprovação |
-| `DELETE` | `/api/v1/service-orders/{id}` | Cancelar OS |
-| `GET` | `/api/v1/service-orders/{id}/execution-time` | Obter tempo de execução |
-| `GET` | `/api/v1/service-orders/customer/{customerId}` | OS por cliente |
-| `GET` | `/api/v1/service-orders/vehicle/{vehicleId}` | OS por veículo |
-| `GET` | `/api/v1/service-orders/status/{status}` | OS por status |
+| `POST` | `/api/os-service/service-orders` | Criar nova OS |
+| `GET` | `/api/os-service/service-orders` | Listar todas as OS |
+| `GET` | `/api/os-service/service-orders/{id}` | Obter OS por ID |
+| `PUT` | `/api/os-service/service-orders/{id}` | Atualizar OS |
+| `PUT` | `/api/os-service/service-orders/{id}/status` | Atualizar status |
+| `PUT` | `/api/os-service/service-orders/{id}/approve` | Processar aprovação |
+| `DELETE` | `/api/os-service/service-orders/{id}` | Cancelar OS |
+| `GET` | `/api/os-service/service-orders/stats/execution-time` | Obter tempo de execução |
+| `GET` | `/api/os-service/service-orders/customer/{customerId}` | OS por cliente |
+| `GET` | `/api/os-service/service-orders/status/{status}` | OS por status |
 
 ### Actuator
 
@@ -307,11 +360,12 @@ docker-compose up -d
 ```
 
 O LocalStack criará automaticamente as filas SQS necessárias:
-- `os-order-events-queue.fifo` (FIFO para eventos de saída)
-- `quote-approved-queue`
-- `execution-completed-queue`
-- `payment-failed-queue`
-- `resource-unavailable-queue`
+- `os-order-events-queue.fifo` — FIFO para eventos de saída: publica eventos do ciclo de vida da OS (`ORDER_CREATED`, `ORDER_WAITING_APPROVAL`, `ORDER_APPROVED`, `ORDER_REJECTED`, `ORDER_FINISHED`, `ORDER_DELIVERED`, `ORDER_CANCELLED`) que são consumidos por outros microsserviços (Billing, Notification, Inventory, etc.).
+- `quote-approved-queue` — fila de entrada: recebe mensagens de aprovação de orçamento para iniciar a execução do serviço (aciona transição para `IN_EXECUTION`).
+- `execution-completed-queue` — fila de entrada: recebe notificações de conclusão de execução para marcar a OS como finalizada (`FINISHED`).
+- `payment-failed-queue` — fila de compensação: recebe notificações de falha de pagamento (Billing) para cancelar a OS e acionar fluxos de compensação.
+- `resource-unavailable-queue` — fila de compensação: recebe mensagens indicando indisponibilidade de peças/recursos para cancelar/ajustar a OS e acionar recompensas ou substituições.
+
 
 ### Configuração
 
@@ -346,9 +400,9 @@ cd app
 ```
 
 4. Acesse:
-- API: http://localhost:8081
-- Swagger UI: http://localhost:8081/swagger-ui.html
-- Health Check: http://localhost:8081/actuator/health
+- API: http://localhost:8080/api/os-service
+- Swagger UI: http://localhost:8080/api/os-service/swagger-ui.html
+- Health Check: http://localhost:8080/api/os-service/actuator/health
 
 ## 🐳 Docker
 
@@ -368,7 +422,7 @@ docker-compose up -d
 ```
 
 Serviços disponíveis:
-- OS Service: http://localhost:8081
+- OS Service: http://localhost:8080/api/os-service
 - PostgreSQL: localhost:5433
 - LocalStack (AWS SQS): http://localhost:4566
 
@@ -381,6 +435,55 @@ aws --endpoint-url=http://localhost:4566 sqs list-queues
 # Ver mensagens em uma fila
 aws --endpoint-url=http://localhost:4566 sqs receive-message \
   --queue-url http://localhost:4566/000000000000/os-order-events-queue.fifo
+```
+
+### Comandos úteis do LocalStack (SQS)
+
+Você pode usar AWS CLI local (`--endpoint-url`) ou `awslocal` dentro do container LocalStack.
+
+```bash
+# 1) Listar filas
+aws --endpoint-url=http://localhost:4566 sqs list-queues
+
+# 2) Criar fila padrão
+aws --endpoint-url=http://localhost:4566 sqs create-queue --queue-name quote-approved-queue
+
+# 3) Criar fila FIFO
+aws --endpoint-url=http://localhost:4566 sqs create-queue \
+       --queue-name os-order-events-queue.fifo \
+       --attributes FifoQueue=true,ContentBasedDeduplication=false
+
+# 4) Enviar mensagem (fila padrão)
+aws --endpoint-url=http://localhost:4566 sqs send-message \
+       --queue-url http://localhost:4566/000000000000/quote-approved-queue \
+       --message-body '{"orderId":1}'
+
+# 5) Enviar mensagem (fila FIFO)
+aws --endpoint-url=http://localhost:4566 sqs send-message \
+       --queue-url http://localhost:4566/000000000000/os-order-events-queue.fifo \
+       --message-body '{"eventType":"ORDER_CREATED","orderId":1,"customerId":1001,"customerName":"Carlos Santos","vehicleId":2001,"vehicleLicensePlate":"ABC1D23","status":"RECEIVED","description":"Barulho no motor","timestamp":"2026-02-12T20:00:00"}' \
+       --message-group-id os-service-events \
+       --message-deduplication-id order-1-created-001
+
+# 6) Receber mensagens
+aws --endpoint-url=http://localhost:4566 sqs receive-message \
+       --queue-url http://localhost:4566/000000000000/quote-approved-queue \
+       --max-number-of-messages 10 \
+       --wait-time-seconds 5
+
+# 7) Apagar mensagem (usar ReceiptHandle retornado no receive-message)
+aws --endpoint-url=http://localhost:4566 sqs delete-message \
+       --queue-url http://localhost:4566/000000000000/quote-approved-queue \
+       --receipt-handle '<RECEIPT_HANDLE>'
+```
+
+Alternativa usando `awslocal` dentro do container:
+
+```bash
+docker exec -it os-localstack awslocal sqs list-queues
+docker exec -it os-localstack awslocal sqs receive-message --queue-url http://localhost:4566/000000000000/quote-approved-queue
+```
+
 ```
 
 ### Parar os serviços
@@ -470,13 +573,13 @@ Executado em push para `main` ou tags `v*`:
 Acesse a documentação interativa:
 
 ```
-http://localhost:8081/swagger-ui.html
+http://localhost:8080/api/os-service/swagger-ui.html
 ```
 
 ### OpenAPI Spec
 
 ```
-http://localhost:8081/api-docs
+http://localhost:8080/api/os-service/api-docs
 ```
 
 ## 📄 Licença

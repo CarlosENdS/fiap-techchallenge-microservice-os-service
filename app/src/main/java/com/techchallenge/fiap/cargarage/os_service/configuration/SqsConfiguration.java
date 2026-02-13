@@ -21,67 +21,67 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 @Configuration
 public class SqsConfiguration {
 
-  @Value("${cloud.aws.region.static:us-east-1}")
-  private String awsRegion;
+    @Value("${spring.cloud.aws.region.static:us-east-1}")
+    private String awsRegion;
 
-  @Value("${cloud.aws.sqs.endpoint:#{null}}")
-  private String sqsEndpoint;
+    @Value("${spring.cloud.aws.sqs.endpoint:#{null}}")
+    private String sqsEndpoint;
 
-  @Value("${cloud.aws.credentials.access-key:#{null}}")
-  private String accessKey;
+    @Value("${spring.cloud.aws.credentials.access-key:#{null}}")
+    private String accessKey;
 
-  @Value("${cloud.aws.credentials.secret-key:#{null}}")
-  private String secretKey;
+    @Value("${spring.cloud.aws.credentials.secret-key:#{null}}")
+    private String secretKey;
 
-  /**
-   * SQS Client for production (AWS).
-   */
-  @Bean
-  @Profile("!local")
-  public SqsClient sqsClient() {
-    return SqsClient.builder()
-        .region(Region.of(awsRegion))
-        .credentialsProvider(DefaultCredentialsProvider.create())
-        .build();
-  }
+    /**
+     * SQS Client for production (AWS).
+     */
+    @Bean
+    @Profile("!local")
+    public SqsClient sqsClient() {
+        return SqsClient.builder()
+                .region(Region.of(awsRegion))
+                .credentialsProvider(DefaultCredentialsProvider.create())
+                .build();
+    }
 
-  /**
-   * SQS Client for local development with LocalStack.
-   */
-  @Bean
-  @Profile("local")
-  public SqsClient sqsClientLocal() {
-    return SqsClient.builder()
-        .region(Region.of(awsRegion))
-        .endpointOverride(URI.create(sqsEndpoint))
-        .credentialsProvider(StaticCredentialsProvider.create(
-            AwsBasicCredentials.create(accessKey, secretKey)))
-        .build();
-  }
+    /**
+     * SQS Client for local development with LocalStack.
+     */
+    @Bean
+    @Profile("local")
+    public SqsClient sqsClientLocal() {
+        return SqsClient.builder()
+                .region(Region.of(awsRegion))
+                .endpointOverride(URI.create(sqsEndpoint))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(accessKey, secretKey)))
+                .build();
+    }
 
-  /**
-   * Async SQS Client for production (AWS).
-   */
-  @Bean
-  @Profile("!local")
-  public SqsAsyncClient sqsAsyncClient() {
-    return SqsAsyncClient.builder()
-        .region(Region.of(awsRegion))
-        .credentialsProvider(DefaultCredentialsProvider.create())
-        .build();
-  }
+    /**
+     * Async SQS Client for production (AWS).
+     */
+    @Bean
+    @Profile("!local")
+    public SqsAsyncClient sqsAsyncClient() {
+        return SqsAsyncClient.builder()
+                .region(Region.of(awsRegion))
+                .credentialsProvider(DefaultCredentialsProvider.create())
+                .build();
+    }
 
-  /**
-   * Async SQS Client for local development with LocalStack.
-   */
-  @Bean
-  @Profile("local")
-  public SqsAsyncClient sqsAsyncClientLocal() {
-    return SqsAsyncClient.builder()
-        .region(Region.of(awsRegion))
-        .endpointOverride(URI.create(sqsEndpoint))
-        .credentialsProvider(StaticCredentialsProvider.create(
-            AwsBasicCredentials.create(accessKey, secretKey)))
-        .build();
-  }
+    /**
+     * Async SQS Client for local development with LocalStack.
+     */
+    @Bean
+    @Profile("local")
+    public SqsAsyncClient sqsAsyncClientLocal() {
+        return SqsAsyncClient.builder()
+                .region(Region.of(awsRegion))
+                .endpointOverride(URI.create(sqsEndpoint))
+                .credentialsProvider(StaticCredentialsProvider.create(
+                        AwsBasicCredentials.create(accessKey, secretKey)))
+                .build();
+    }
 }

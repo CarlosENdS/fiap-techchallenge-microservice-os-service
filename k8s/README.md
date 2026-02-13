@@ -114,7 +114,7 @@ kubectl logs -f deployment/os-service -n os-service
 kubectl get svc os-service -n os-service
 
 # Port-forward for local access
-kubectl port-forward svc/os-service 8081:80 -n os-service
+kubectl port-forward svc/os-service 8080:80 -n os-service
 ```
 
 ## Scaling
@@ -153,7 +153,7 @@ kubectl delete namespace os-service
 | DB_URL | AWS RDS PostgreSQL connection URL | jdbc:postgresql://your-rds.rds.amazonaws.com:5432/os_service_db |
 | CLOUD_AWS_REGION_STATIC | AWS Region | us-east-1 |
 | SQS_OS_EVENTS_QUEUE_URL | SQS queue URL for events | - |
-| SERVER_PORT | Application port | 8081 |
+| SERVER_PORT | Application port | 8080 |
 
 ### Secrets
 
@@ -168,8 +168,8 @@ echo -n "your-value" | base64
 Access Prometheus metrics at `/actuator/prometheus`:
 
 ```bash
-kubectl port-forward svc/os-service 8081:80 -n os-service
-curl http://localhost:8081/actuator/prometheus
+kubectl port-forward svc/os-service 8080:80 -n os-service
+curl http://localhost:8080/api/os-service/actuator/prometheus
 ```
 
 ## Troubleshooting

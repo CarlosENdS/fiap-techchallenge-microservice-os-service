@@ -4,13 +4,13 @@ metadata:
   name: os-service-config
   namespace: os-service
 data:
-  SPRING_PROFILES_ACTIVE: "kubernetes"
-  SERVER_PORT: "8081"
+  SERVER_PORT: "8080"
+  SERVER_SERVLET_CONTEXT_PATH: "/api/os-service"
   # AWS RDS PostgreSQL - URL configured via Secret for security
-  SPRING_JPA_HIBERNATE_DDL_AUTO: "update"
+  SPRING_JPA_HIBERNATE_DDL_AUTO: "none"
   SPRING_JPA_SHOW_SQL: "false"
   # AWS Configuration
-  CLOUD_AWS_REGION_STATIC: "us-east-1"
+  AWS_REGION: "us-east-1"
   # SQS Queue Names
   SQS_QUOTE_APPROVED_QUEUE: "quote-approved-queue"
   SQS_EXECUTION_COMPLETED_QUEUE: "execution-completed-queue"

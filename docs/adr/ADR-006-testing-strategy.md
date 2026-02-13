@@ -99,7 +99,7 @@ class ServiceOrderControllerIntegrationTest {
     @Test
     void shouldCreateServiceOrder() {
         var response = restTemplate.postForEntity(
-            "/api/v1/service-orders", 
+            "/api/os-service/service-orders", 
             request, 
             ServiceOrderResponseDto.class
         );
