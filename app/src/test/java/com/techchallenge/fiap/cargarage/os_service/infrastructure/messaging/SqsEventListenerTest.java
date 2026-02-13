@@ -70,7 +70,7 @@ class SqsEventListenerTest {
         void shouldProcessQuoteApprovedEventSuccessfully() {
             // Arrange
             String message = "{\"orderId\": 100}";
-            ServiceOrder updatedOrder = createTestOrder(100L, ServiceOrderStatus.waitingApproval());
+            ServiceOrder updatedOrder = createTestOrder(100L, ServiceOrderStatus.inExecution());
 
             when(updateStatusUseCase.execute(eq(100L), any(ServiceOrderStatusUpdateDto.class)))
                     .thenReturn(updatedOrder);
@@ -84,7 +84,7 @@ class SqsEventListenerTest {
             verify(updateStatusUseCase).execute(eq(100L), captor.capture());
 
             ServiceOrderStatusUpdateDto updateDto = captor.getValue();
-            assertEquals(ServiceOrderStatusEnum.WAITING_APPROVAL.name(), updateDto.status());
+            assertEquals(ServiceOrderStatusEnum.IN_EXECUTION.name(), updateDto.status());
         }
 
         @Test

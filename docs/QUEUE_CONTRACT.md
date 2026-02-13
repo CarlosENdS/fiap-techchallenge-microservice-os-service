@@ -76,7 +76,7 @@ Consumidas por `SqsEventListener`.
 
 - Campo esperado no JSON: `orderId` (**obrigatório**)
 - Demais campos são ignorados
-- Ação executada: atualiza status para `WAITING_APPROVAL`
+- Ação executada: atualiza status para `IN_EXECUTION`
 
 Exemplo mínimo:
 

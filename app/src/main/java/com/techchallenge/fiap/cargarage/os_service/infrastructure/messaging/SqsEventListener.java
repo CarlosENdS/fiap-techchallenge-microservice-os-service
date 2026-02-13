@@ -37,7 +37,7 @@ public class SqsEventListener {
 
     /**
      * Handles quote approved event from Billing service.
-     * Transitions order to WAITING_APPROVAL status.
+     * Transitions order to IN_EXECUTION status.
      */
     @SqsListener("${messaging.sqs.queue.quote-approved}")
     public void handleQuoteApproved(String message) {
@@ -49,7 +49,7 @@ public class SqsEventListener {
 
             updateStatusUseCase.execute(orderId,
                     ServiceOrderStatusUpdateDto.builder()
-                            .status(ServiceOrderStatusEnum.WAITING_APPROVAL.name())
+                            .status(ServiceOrderStatusEnum.IN_EXECUTION.name())
                             .build());
         } catch (JsonProcessingException e) {
             log.error("Error processing quote approved event", e);
