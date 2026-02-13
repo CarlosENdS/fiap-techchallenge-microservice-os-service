@@ -18,8 +18,11 @@ on:
 
 env:
   JAVA_VERSION: '21'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/os-service
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: cargarage-os-service
+  EKS_CLUSTER_NAME: cargarage-cluster
+  TF_CLOUD_ORGANIZATION: fiap-techchallenge
+  TF_WORKSPACE: cargarage-infra-database
 
 jobs:
   build-and-push:
@@ -27,11 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.version.outputs.version }}
+      image-uri: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout code
@@ -44,31 +46,31 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Extract version from POM
+        id: version
+        working-directory: ./app
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Extracted version: ${VERSION}"
+
       - name: Build with Maven
         working-directory: ./app
         run: mvn clean package -DskipTests -B
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
 
       - name: Build and push Docker image
         id: build
@@ -77,37 +79,96 @@ jobs:
           context: ./app
           file: ./app/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.version.outputs.version }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy-staging:
-    name: Deploy to Staging
+  deploy:
+    name: Deploy to Kubernetes
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
-    environment: staging
+    environment: ${{ github.event.inputs.environment || 'staging' }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          version: 'latest'
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Configure kubectl
+      - name: Fetch infrastructure outputs from Terraform Cloud
+        id: tf-outputs
+        uses: hashicorp/tfc-workflows-github/actions/workspace-output@v1.3.0
+        with:
+          hostname: app.terraform.io
+          token: ${{ secrets.TF_API_TOKEN }}
+          organization: ${{ env.TF_CLOUD_ORGANIZATION }}
+          workspace: ${{ env.TF_WORKSPACE }}
+
+      - name: Parse Terraform outputs
+        id: parsed-outputs
         run: |
-          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
-          export KUBECONFIG=kubeconfig
+          # Parse outputs from tfc-workflows action
+          OUTPUTS='${{ steps.tf-outputs.outputs.workspace-outputs }}'
+          
+          RDS_ENDPOINT=$(echo "$OUTPUTS" | jq -r '.rds_endpoint.value')
+          OS_DB_NAME=$(echo "$OUTPUTS" | jq -r '.os_service_database_name.value')
+          OS_DB_USERNAME=$(echo "$OUTPUTS" | jq -r '.os_service_database_username.value')
+          IRSA_ROLE_ARN=$(echo "$OUTPUTS" | jq -r '.os_service_irsa_role_arn.value')
+          SQS_OS_EVENTS=$(echo "$OUTPUTS" | jq -r '.sqs_os_events_queue_url.value')
+          SQS_QUOTE_APPROVED=$(echo "$OUTPUTS" | jq -r '.sqs_quote_approved_queue_url.value')
+          SQS_EXECUTION_COMPLETED=$(echo "$OUTPUTS" | jq -r '.sqs_execution_completed_queue_url.value')
+          SQS_PAYMENT_FAILED=$(echo "$OUTPUTS" | jq -r '.sqs_payment_failed_queue_url.value')
+          SQS_RESOURCE_UNAVAILABLE=$(echo "$OUTPUTS" | jq -r '.sqs_resource_unavailable_queue_url.value')
+          
+          # Build DB URL (RDS endpoint already includes port)
+          DB_URL="jdbc:postgresql://${RDS_ENDPOINT}/${OS_DB_NAME}"
+          
+          # Export outputs
+          echo "DB_URL=${DB_URL}" >> $GITHUB_OUTPUT
+          echo "DB_USERNAME=${OS_DB_USERNAME}" >> $GITHUB_OUTPUT
+          echo "IRSA_ROLE_ARN=${IRSA_ROLE_ARN}" >> $GITHUB_OUTPUT
+          echo "SQS_OS_EVENTS=${SQS_OS_EVENTS}" >> $GITHUB_OUTPUT
+          echo "SQS_QUOTE_APPROVED=${SQS_QUOTE_APPROVED}" >> $GITHUB_OUTPUT
+          echo "SQS_EXECUTION_COMPLETED=${SQS_EXECUTION_COMPLETED}" >> $GITHUB_OUTPUT
+          echo "SQS_PAYMENT_FAILED=${SQS_PAYMENT_FAILED}" >> $GITHUB_OUTPUT
+          echo "SQS_RESOURCE_UNAVAILABLE=${SQS_RESOURCE_UNAVAILABLE}" >> $GITHUB_OUTPUT
+          
+          echo "Infrastructure outputs parsed successfully!"
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Prepare Kubernetes manifests
+        run: |
+          # Substitute values in secrets.yaml using sed
+          sed -i "s|__DB_URL_B64__|$(echo -n '${{ steps.parsed-outputs.outputs.DB_URL }}' | base64 -w0)|g" k8s/secrets.yaml
+          sed -i "s|__DB_USERNAME_B64__|$(echo -n '${{ steps.parsed-outputs.outputs.DB_USERNAME }}' | base64 -w0)|g" k8s/secrets.yaml
+          sed -i "s|__DB_PASSWORD_B64__|$(echo -n '${{ secrets.DB_PASSWORD }}' | base64 -w0)|g" k8s/secrets.yaml
+          sed -i "s|__SQS_OS_EVENTS_QUEUE_URL_B64__|$(echo -n '${{ steps.parsed-outputs.outputs.SQS_OS_EVENTS }}' | base64 -w0)|g" k8s/secrets.yaml
+          
+          # Substitute values in configmap.yaml
+          sed -i "s|__SQS_QUOTE_APPROVED_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_QUOTE_APPROVED }}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_EXECUTION_COMPLETED_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_EXECUTION_COMPLETED }}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_PAYMENT_FAILED_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_PAYMENT_FAILED }}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_RESOURCE_UNAVAILABLE_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_RESOURCE_UNAVAILABLE }}|g" k8s/configmap.yaml
+          
+          # Substitute values in service-account.yaml
+          sed -i "s|__IRSA_ROLE_ARN__|${{ steps.parsed-outputs.outputs.IRSA_ROLE_ARN }}|g" k8s/service-account.yaml
+          
+          # Substitute image in deployment
+          sed -i "s|__IMAGE_URI__|${{ needs.build-and-push.outputs.image-uri }}|g" k8s/app-deployment.yaml
 
       - name: Deploy to Kubernetes
         run: |
-          export KUBECONFIG=kubeconfig
-          
-          # Apply Kubernetes manifests
+          # Apply all resources
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/service-account.yaml
           kubectl apply -f k8s/configmap.yaml
@@ -116,61 +177,11 @@ jobs:
           kubectl apply -f k8s/app-service.yaml
           kubectl apply -f k8s/hpa.yaml
           
-          # Update image
-          kubectl set image deployment/os-service os-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} -n os-service
-          
           # Wait for rollout
           kubectl rollout status deployment/os-service -n os-service --timeout=300s
 
       - name: Verify deployment
         run: |
-          export KUBECONFIG=kubeconfig
-          kubectl get pods -n os-service
-          kubectl get svc -n os-service
-
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    needs: [build-and-push, deploy-staging]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
-    environment: production
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      - name: Configure kubectl
-        run: |
-          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
-          export KUBECONFIG=kubeconfig
-
-      - name: Deploy to Kubernetes
-        run: |
-          export KUBECONFIG=kubeconfig
-          
-          # Apply Kubernetes manifests
-          kubectl apply -f k8s/namespace.yaml
-          kubectl apply -f k8s/service-account.yaml
-          kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/secrets.yaml
-          kubectl apply -f k8s/app-deployment.yaml
-          kubectl apply -f k8s/app-service.yaml
-          kubectl apply -f k8s/hpa.yaml
-          
-          # Update image
-          kubectl set image deployment/os-service os-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} -n os-service
-          
-          # Wait for rollout
-          kubectl rollout status deployment/os-service -n os-service --timeout=300s
-
-      - name: Verify deployment
-        run: |
-          export KUBECONFIG=kubeconfig
           kubectl get pods -n os-service
           kubectl get svc -n os-service
 
@@ -181,6 +192,5 @@ jobs:
       - name: Rollback on failure
         if: failure()
         run: |
-          export KUBECONFIG=kubeconfig
-          kubectl rollout undo deployment/os-service -n os-service
-          echo "Deployment failed, rolled back to previous version"
+          kubectl rollout undo deployment/os-service -n os-service || true
+          echo "Deployment failed, attempted rollback to previous version"

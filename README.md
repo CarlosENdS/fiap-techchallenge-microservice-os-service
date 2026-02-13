@@ -510,6 +510,8 @@ kubectl get all -n os-service
 
 Consulte [k8s/README.md](k8s/README.md) para instruções detalhadas.
 
+Para configuração do CD pipeline e IRSA, veja [docs/DEPLOY_SETUP.md](docs/DEPLOY_SETUP.md).
+
 ## 🧪 Testes
 
 ### Executar Todos os Testes
@@ -560,11 +562,43 @@ Executado em push/PR para `main`, `develop`, `feature/**`:
 
 Executado em push para `main` ou tags `v*`:
 
-1. Build da imagem Docker
-2. Push para Container Registry
-3. Deploy em Staging
-4. Deploy em Production (para tags)
-5. Rollback automático em caso de falha
+1. **Versionamento Automático**: Extrai versão do `pom.xml` da aplicação
+2. **Build da Imagem Docker**: Gera imagem com tag baseada na versão do POM
+3. **Push para AWS ECR**: Autenticação via OIDC (sem credenciais estáticas)
+4. **Deploy em EKS**: Atualiza deployment com nova imagem
+
+#### Configuração Necessária
+
+Secrets no GitHub:
+- `AWS_ROLE_TO_ASSUME`: ARN da role IAM para GitHub Actions (output do Terraform)
+- `EKS_CLUSTER_NAME`: Nome do cluster EKS
+
+Infraestrutura (provisionada via Terraform):
+- ECR Repository: `os-service`
+- IAM Role com permissões para ECR push e EKS describe
+- IRSA configurado para pods acessarem SQS
+
+#### Fluxo de Deploy
+
+```
+Push to main/tag ──▶ Build ──▶ ECR Push ──▶ kubectl apply ──▶ Rollout
+      │                 │          │              │
+      │                 │          │              └── Monitora rollout status
+      │                 │          └── Autenticação OIDC
+      │                 └── Tag: {ECR_URI}:{POM_VERSION}
+      └── Extrai versão do pom.xml
+```
+
+### Recursos K8s Otimizados
+
+Os manifests Kubernetes estão configurados para máquinas **t3.small** (2 vCPU, 2GB RAM):
+
+| Recurso | Request | Limit |
+|---------|---------|-------|
+| CPU | 100m | 300m |
+| Memory | 256Mi | 512Mi |
+
+HPA configurado: 1-2 réplicas
 
 ## 📖 Documentação da API
 

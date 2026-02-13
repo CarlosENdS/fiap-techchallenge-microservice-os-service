@@ -6,7 +6,8 @@ metadata:
   labels:
     app: os-service
 spec:
-  replicas: 2
+  # Single replica for cost optimization (educational environment)
+  replicas: 1
   selector:
     matchLabels:
       app: os-service
@@ -14,14 +15,11 @@ spec:
     metadata:
       labels:
         app: os-service
-      annotations:
-        # IAM Role for Service Account - allows SQS access without explicit credentials
-        iam.amazonaws.com/role: "arn:aws:iam::ACCOUNT_ID:role/os-service-role"
     spec:
       serviceAccountName: os-service-sa
       containers:
         - name: os-service
-          image: os-service:latest
+          image: __IMAGE_URI__
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -30,13 +28,14 @@ spec:
                 name: os-service-config
             - secretRef:
                 name: os-service-secrets
+          # Resources optimized for t3.small (2 vCPU, 2GB RAM)
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "250m"
+              memory: "256Mi"
+              cpu: "100m"
             limits:
-              memory: "1Gi"
-              cpu: "500m"
+              memory: "512Mi"
+              cpu: "300m"
           livenessProbe:
             httpGet:
               path: /api/os-service/actuator/health/liveness
