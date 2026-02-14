@@ -144,13 +144,13 @@ jobs:
             exit 1
           fi
 
-          # Get outputs from state version
+          # Get outputs from state version (with pagination to get all outputs)
           OUTPUTS=$(curl -s \
             --header "Authorization: Bearer ${TF_API_TOKEN}" \
             --header "Content-Type: application/vnd.api+json" \
-            "https://app.terraform.io/api/v2/state-versions/${STATE_VERSION_ID}/outputs")
+            "https://app.terraform.io/api/v2/state-versions/${STATE_VERSION_ID}/outputs?page%5Bsize%5D=100")
 
-          echo "Available outputs:"
+          echo "Available outputs ($(echo "$OUTPUTS" | jq '.data | length')):"
           echo "$OUTPUTS" | jq -r '.data[].attributes.name'
 
           # Helper function to extract value by output name
