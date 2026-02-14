@@ -11,7 +11,7 @@
     </parent>
     <groupId>com.techchallenge.fiap.cargarage</groupId>
     <artifactId>os-service</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <name>os-service</name>
     <description>Microservice for Service Order (OS) Management - FIAP Tech Challenge</description>
     <url />

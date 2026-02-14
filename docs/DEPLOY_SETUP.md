@@ -20,8 +20,10 @@ Configure os seguintes **secrets** no repositório GitHub:
 |-------------|-----------|------------|
 | `AWS_ACCESS_KEY_ID` | Access Key do IAM User | Console AWS ou terraform output |
 | `AWS_SECRET_ACCESS_KEY` | Secret Access Key | Console AWS ou terraform output |
-| `DB_PASSWORD` | Senha do banco RDS (os_service_user) | Definida no `rds.tf` (OsService2024!) |
+| `DB_USERNAME` | Username do banco RDS | `os_service_user` (ou conforme definido no Terraform) |
+| `DB_PASSWORD` | Senha do banco RDS (os_service_user) | Definida no `rds.tf` |
 | `TF_API_TOKEN` | Token de API do Terraform Cloud | app.terraform.io → User Settings → Tokens |
+| `SONAR_TOKEN` | Token de autenticação SonarCloud | sonarcloud.io → My Account → Security |
 
 ### Terraform Cloud
 
@@ -56,9 +58,10 @@ env:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  2. CD PIPELINE (GitHub Actions)                                        │
 │     - Autentica com credenciais estáticas (IAM User)                    │
-│     - Busca outputs do Terraform Cloud via tfc-workflows-github action  │
+│     - Busca outputs do Terraform Cloud via API REST (curl)              │
 │     - Substitui placeholders nos manifests K8s (sed)                    │
 │     - kubectl apply dos recursos                                         │
+│     - Gera summary com URLs de acesso à API                             │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -69,6 +72,20 @@ env:
 │     - SDK AWS assume a role e acessa SQS sem credenciais                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Outputs do Terraform Cloud
+
+O pipeline busca os seguintes outputs via API do Terraform Cloud:
+
+| Output | Descrição |
+|--------|-----------|
+| `os_service_jdbc_url` | URL JDBC para conexão com o banco |
+| `os_service_irsa_role_arn` | ARN da role IRSA para pods |
+| `sqs_os_events_queue_url` | Fila SQS de eventos |
+| `sqs_quote_approved_queue_url` | Fila SQS de aprovação |
+| `sqs_execution_completed_queue_url` | Fila SQS de execução |
+| `sqs_payment_failed_queue_url` | Fila SQS de falha de pagamento |
+| `sqs_resource_unavailable_queue_url` | Fila SQS de recurso indisponível |
 
 ## 🗄️ Estrutura do RDS
 

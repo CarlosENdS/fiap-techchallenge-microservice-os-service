@@ -221,6 +221,7 @@ jobs:
           EXTERNAL_HOST: ${{ steps.deployment-info.outputs.external-host }}
           PODS: ${{ steps.deployment-info.outputs.pods }}
         run: |
+          BASE_URL="http://${EXTERNAL_HOST}:8080/api/os-service"
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## 🚀 Deployment Summary
 
@@ -236,19 +237,24 @@ jobs:
 
           | Endpoint | URL |
           |----------|-----|
-          | **Base URL** | \`http://${EXTERNAL_HOST}:8080\` |
-          | **Swagger UI** | [Open Swagger](http://${EXTERNAL_HOST}:8080/swagger-ui.html) |
-          | **OpenAPI Spec** | [Download JSON](http://${EXTERNAL_HOST}:8080/v3/api-docs) |
-          | **Health Check** | \`http://${EXTERNAL_HOST}:8080/actuator/health\` |
+          | **Base URL** | \`${BASE_URL}\` |
+          | **Swagger UI** | [Open Swagger](${BASE_URL}/swagger-ui/index.html) |
+          | **OpenAPI Spec** | [Download JSON](${BASE_URL}/v3/api-docs) |
+          | **Health Check** | \`${BASE_URL}/actuator/health\` |
 
           ### 📋 Quick Test Commands
 
           \`\`\`bash
           # Health check
-          curl -s http://${EXTERNAL_HOST}:8080/actuator/health | jq .
+          curl -s ${BASE_URL}/actuator/health | jq .
 
-          # Get service orders
-          curl -s http://${EXTERNAL_HOST}:8080/api/v1/service-orders | jq .
+          # List service orders
+          curl -s ${BASE_URL}/v1/service-orders | jq .
+
+          # Create service order
+          curl -X POST ${BASE_URL}/v1/service-orders \\
+            -H "Content-Type: application/json" \\
+            -d '{"vehicleId": "uuid", "customerId": "uuid", "description": "Troca de óleo"}'
           \`\`\`
 
           ---
