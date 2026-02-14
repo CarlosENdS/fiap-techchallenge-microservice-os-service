@@ -539,9 +539,9 @@ cd app
 ./mvnw jacoco:report
 ```
 
-Relatório disponível em: `app/target/site/jacoco/index.html`
+Relatório local disponível em: `app/target/site/jacoco/index.html`
 
-**Cobertura mínima exigida: 80%**
+**Cobertura mínima:** 80% (validada via Quality Gate do SonarCloud)
 
 ## 🔄 CI/CD
 
@@ -549,45 +549,61 @@ Relatório disponível em: `app/target/site/jacoco/index.html`
 
 Executado em push/PR para `main`, `develop`, `feature/**`:
 
-1. Build e compilação
-2. Testes unitários
-3. Testes de integração
-4. Verificação de cobertura (JaCoCo)
-5. Análise de código (Checkstyle, SpotBugs)
-6. Scan de segurança (OWASP)
-7. Build da imagem Docker
-8. Testes BDD
+| Job | Descrição |
+|-----|------------|
+| **build** | Compilação e empacotamento Maven |
+| **test** | Execução de testes unitários e de integração |
+| **bdd** | Testes BDD com Cucumber |
+| **sonarcloud** | Análise de qualidade com SonarCloud |
+
+#### Qualidade de Código (SonarCloud)
+
+A análise de código é feita via **SonarCloud** com a action oficial:
+
+- **Cobertura mínima:** 80% (configurado no Quality Gate)
+- **Dashboard:** [SonarCloud Project](https://sonarcloud.io/project/overview?id=fiap-soat-techchallenge_os-service)
+- **PR Decoration:** Comentários automáticos em PRs
+
+Secrets necessários:
+- `SONAR_TOKEN`: Token de autenticação do SonarCloud
 
 ### CD Pipeline (cd.yml)
 
 Executado em push para `main` ou tags `v*`:
 
-1. **Versionamento Automático**: Extrai versão do `pom.xml` da aplicação
-2. **Build da Imagem Docker**: Gera imagem com tag baseada na versão do POM
-3. **Push para AWS ECR**: Autenticação via OIDC (sem credenciais estáticas)
-4. **Deploy em EKS**: Atualiza deployment com nova imagem
+| Step | Descrição |
+|------|------------|
+| **Build & Push** | Build da imagem Docker e push para ECR |
+| **Terraform Outputs** | Busca outputs de infra via Terraform Cloud API |
+| **Prepare Manifests** | Substitui placeholders nos manifests K8s |
+| **Deploy** | Aplica recursos no EKS |
 
 #### Configuração Necessária
 
 Secrets no GitHub:
-- `AWS_ROLE_TO_ASSUME`: ARN da role IAM para GitHub Actions (output do Terraform)
-- `EKS_CLUSTER_NAME`: Nome do cluster EKS
 
-Infraestrutura (provisionada via Terraform):
-- ECR Repository: `os-service`
-- IAM Role com permissões para ECR push e EKS describe
-- IRSA configurado para pods acessarem SQS
+| Secret | Descrição |
+|--------|------------|
+| `AWS_ACCESS_KEY_ID` | Credencial AWS |
+| `AWS_SECRET_ACCESS_KEY` | Credencial AWS |
+| `TF_API_TOKEN` | Token da API do Terraform Cloud |
+| `DB_USERNAME` | Username do banco de dados |
+| `DB_PASSWORD` | Senha do banco de dados |
 
 #### Fluxo de Deploy
 
 ```
-Push to main/tag ──▶ Build ──▶ ECR Push ──▶ kubectl apply ──▶ Rollout
-      │                 │          │              │
-      │                 │          │              └── Monitora rollout status
-      │                 │          └── Autenticação OIDC
-      │                 └── Tag: {ECR_URI}:{POM_VERSION}
-      └── Extrai versão do pom.xml
+Push main/tag → Build Docker → Push ECR → Fetch TF Outputs → Prepare K8s → Deploy EKS
+                                                 │
+                                                 └── Outputs: DB_URL, SQS queues, IRSA role
 ```
+
+#### Summary de Deploy
+
+Após deploy bem-sucedido, o pipeline gera um **summary** com:
+- URLs de acesso à API (Base URL, Swagger UI, Health Check)
+- Comandos de teste rápido
+- Status dos pods
 
 ### Recursos K8s Otimizados
 
@@ -606,15 +622,28 @@ HPA configurado: 1-2 réplicas
 
 Acesse a documentação interativa:
 
-```
-http://localhost:8080/api/os-service/swagger-ui.html
-```
+- **Local:** http://localhost:8080/api/os-service/swagger-ui/index.html
+- **Produção:** `http://{EXTERNAL_HOST}:8080/api/os-service/swagger-ui/index.html`
 
 ### OpenAPI Spec
 
 ```
-http://localhost:8080/api/os-service/api-docs
+http://localhost:8080/api/os-service/v3/api-docs
 ```
+
+### Endpoints Principais
+
+| Método | Endpoint | Descrição |
+|--------|----------|------------|
+| GET | `/v1/service-orders` | Lista ordens de serviço |
+| POST | `/v1/service-orders` | Cria nova ordem de serviço |
+| GET | `/v1/service-orders/{id}` | Busca ordem por ID |
+| PUT | `/v1/service-orders/{id}` | Atualiza ordem de serviço |
+| PATCH | `/v1/service-orders/{id}/approve` | Aprova orçamento |
+| PATCH | `/v1/service-orders/{id}/reject` | Rejeita orçamento |
+| GET | `/actuator/health` | Health check |
+
+> **Nota:** Todos os endpoints são prefixados com `/api/os-service`
 
 ## 📄 Licença
 

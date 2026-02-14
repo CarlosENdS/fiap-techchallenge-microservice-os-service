@@ -14,18 +14,28 @@ import io.swagger.v3.oas.models.servers.Server;
 
 /**
  * OpenAPI/Swagger configuration.
+ * 
+ * Server URL is configured via the property 'app.swagger.server-url'.
+ * If not set, uses relative path so Swagger UI uses the current host.
  */
 @Configuration
 public class OpenApiConfiguration {
 
-    @Value("${server.port:8080}")
-    private String serverPort;
-
-    @Value("${server.servlet.context-path:}")
-    private String contextPath;
+    @Value("${app.swagger.server-url:}")
+    private String serverUrl;
 
     @Bean
     public OpenAPI customOpenAPI() {
+        Server server = new Server();
+
+        // Use configured URL or empty string for relative path (current host)
+        if (serverUrl != null && !serverUrl.isBlank()) {
+            server.url(serverUrl).description("API Server");
+        } else {
+            // Empty URL makes Swagger use the current host/origin
+            server.url("").description("Current Server");
+        }
+
         return new OpenAPI()
                 .info(new Info()
                         .title("Service Order (OS) Microservice API")
@@ -51,9 +61,6 @@ public class OpenApiConfiguration {
                         .license(new License()
                                 .name("Apache 2.0")
                                 .url("https://www.apache.org/licenses/LICENSE-2.0")))
-                .servers(List.of(
-                        new Server()
-                                .url("http://localhost:" + serverPort + contextPath)
-                                .description("Local Development Server")));
+                .servers(List.of(server));
     }
 }
