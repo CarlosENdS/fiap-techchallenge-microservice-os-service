@@ -102,49 +102,64 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Fetch infrastructure outputs from Terraform Cloud
-        id: tf-outputs
-        uses: hashicorp/tfc-workflows-github/actions/workspace-output@v1.3.0
-        with:
-          hostname: app.terraform.io
-          token: ${{ secrets.TF_API_TOKEN }}
-          organization: ${{ env.TF_CLOUD_ORGANIZATION }}
-          workspace: ${{ env.TF_WORKSPACE }}
-
-      - name: Mask infrastructure outputs
-        env:
-          TF_OUTPUTS_JSON: ${{ steps.tf-outputs.outputs.workspace-outputs-json }}
-        run: |
-          # Mask the entire JSON output to prevent it from appearing in subsequent logs
-          echo "::add-mask::${TF_OUTPUTS_JSON}"
-
-          # Extract and mask individual sensitive values
-          for value in $(echo "$TF_OUTPUTS_JSON" | jq -r '.outputs[].value // empty' 2>/dev/null); do
-            if [[ -n "$value" && "$value" != "null" ]]; then
-              echo "::add-mask::${value}"
-            fi
-          done
-
-      - name: Parse Terraform outputs
+      - name: Fetch and parse Terraform outputs
         id: parsed-outputs
         env:
-          TF_OUTPUTS_JSON: ${{ steps.tf-outputs.outputs.workspace-outputs-json }}
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          TF_ORG: ${{ env.TF_CLOUD_ORGANIZATION }}
+          TF_WORKSPACE: ${{ env.TF_WORKSPACE }}
         run: |
           set -euo pipefail
 
-          # Helper function to extract value from outputs array by name
+          echo "Organization: ${TF_ORG}"
+          echo "Workspace: ${TF_WORKSPACE}"
+
+          # Get workspace ID
+          WORKSPACE_RESPONSE=$(curl -s \
+            --header "Authorization: Bearer ${TF_API_TOKEN}" \
+            --header "Content-Type: application/vnd.api+json" \
+            "https://app.terraform.io/api/v2/organizations/${TF_ORG}/workspaces/${TF_WORKSPACE}")
+
+          WORKSPACE_ID=$(echo "$WORKSPACE_RESPONSE" | jq -r '.data.id')
+          echo "Workspace ID: ${WORKSPACE_ID}"
+
+          if [[ "$WORKSPACE_ID" == "null" || -z "$WORKSPACE_ID" ]]; then
+            echo "Error fetching workspace. Response:"
+            echo "$WORKSPACE_RESPONSE" | jq .
+            exit 1
+          fi
+
+          # Get current state version
+          STATE_RESPONSE=$(curl -s \
+            --header "Authorization: Bearer ${TF_API_TOKEN}" \
+            --header "Content-Type: application/vnd.api+json" \
+            "https://app.terraform.io/api/v2/workspaces/${WORKSPACE_ID}/current-state-version")
+
+          STATE_VERSION_ID=$(echo "$STATE_RESPONSE" | jq -r '.data.id')
+          echo "State Version ID: ${STATE_VERSION_ID}"
+
+          if [[ "$STATE_VERSION_ID" == "null" || -z "$STATE_VERSION_ID" ]]; then
+            echo "Error fetching state version. Response:"
+            echo "$STATE_RESPONSE" | jq .
+            exit 1
+          fi
+
+          # Get outputs from state version
+          OUTPUTS=$(curl -s \
+            --header "Authorization: Bearer ${TF_API_TOKEN}" \
+            --header "Content-Type: application/vnd.api+json" \
+            "https://app.terraform.io/api/v2/state-versions/${STATE_VERSION_ID}/outputs")
+
+          echo "Available outputs:"
+          echo "$OUTPUTS" | jq -r '.data[].attributes.name'
+
+          # Helper function to extract value by output name
           get_output() {
-            local val
-            val=$(echo "$TF_OUTPUTS_JSON" | jq -r --arg name "$1" '.outputs[] | select(.name == $name) | .value // empty')
-            # Return empty if null
-            if [[ "$val" == "null" ]]; then
-              echo ""
-            else
-              echo "$val"
-            fi
+            echo "$OUTPUTS" | jq -r --arg name "$1" '.data[] | select(.attributes.name == $name) | .attributes.value // empty'
           }
 
-          # Parse outputs from tfc-workflows action (array format)
+          # Extract outputs
+          DB_URL=$(get_output "os_service_jdbc_url")
           IRSA_ROLE_ARN=$(get_output "os_service_irsa_role_arn")
           SQS_OS_EVENTS=$(get_output "sqs_os_events_queue_url")
           SQS_QUOTE_APPROVED=$(get_output "sqs_quote_approved_queue_url")
@@ -152,19 +167,13 @@ jobs:
           SQS_PAYMENT_FAILED=$(get_output "sqs_payment_failed_queue_url")
           SQS_RESOURCE_UNAVAILABLE=$(get_output "sqs_resource_unavailable_queue_url")
 
-          # Use pre-built JDBC URL from Terraform
-          DB_URL=$(get_output "os_service_jdbc_url")
+          echo "Extracted values:"
+          echo "DB_URL: ${DB_URL:-EMPTY}"
+          echo "IRSA_ROLE_ARN: ${IRSA_ROLE_ARN:-EMPTY}"
+          echo "SQS_OS_EVENTS: ${SQS_OS_EVENTS:-EMPTY}"
+          echo "SQS_QUOTE_APPROVED: ${SQS_QUOTE_APPROVED:-EMPTY}"
 
-          # Mask all sensitive values in logs
-          echo "::add-mask::${DB_URL}"
-          echo "::add-mask::${IRSA_ROLE_ARN}"
-          echo "::add-mask::${SQS_OS_EVENTS}"
-          echo "::add-mask::${SQS_QUOTE_APPROVED}"
-          echo "::add-mask::${SQS_EXECUTION_COMPLETED}"
-          echo "::add-mask::${SQS_PAYMENT_FAILED}"
-          echo "::add-mask::${SQS_RESOURCE_UNAVAILABLE}"
-
-          # Export outputs (DB_USERNAME and DB_PASSWORD come from secrets)
+          # Export outputs
           echo "DB_URL=${DB_URL}" >> $GITHUB_OUTPUT
           echo "IRSA_ROLE_ARN=${IRSA_ROLE_ARN}" >> $GITHUB_OUTPUT
           echo "SQS_OS_EVENTS=${SQS_OS_EVENTS}" >> $GITHUB_OUTPUT
@@ -193,17 +202,6 @@ jobs:
           IMAGE_URI: ${{ needs.build-and-push.outputs.image-uri }}
         run: |
           set -euo pipefail
-
-          # Mask sensitive values
-          echo "::add-mask::${DB_URL}"
-          echo "::add-mask::${DB_USERNAME}"
-          echo "::add-mask::${DB_PASSWORD}"
-          echo "::add-mask::${SQS_OS_EVENTS}"
-          echo "::add-mask::${SQS_QUOTE_APPROVED}"
-          echo "::add-mask::${SQS_EXECUTION_COMPLETED}"
-          echo "::add-mask::${SQS_PAYMENT_FAILED}"
-          echo "::add-mask::${SQS_RESOURCE_UNAVAILABLE}"
-          echo "::add-mask::${IRSA_ROLE_ARN}"
 
           # Substitute values in secrets.yaml using sed
           sed -i "s|__DB_URL_B64__|$(echo -n "${DB_URL}" | base64 -w0)|g" k8s/secrets.yaml
