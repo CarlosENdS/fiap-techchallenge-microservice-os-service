@@ -27,7 +27,7 @@ public class OpenApiConfiguration {
     @Bean
     public OpenAPI customOpenAPI() {
         Server server = new Server();
-        
+
         // Use configured URL or empty string for relative path (current host)
         if (serverUrl != null && !serverUrl.isBlank()) {
             server.url(serverUrl).description("API Server");
@@ -35,7 +35,7 @@ public class OpenApiConfiguration {
             // Empty URL makes Swagger use the current host/origin
             server.url("").description("Current Server");
         }
-        
+
         return new OpenAPI()
                 .info(new Info()
                         .title("Service Order (OS) Microservice API")
