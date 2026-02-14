@@ -19,10 +19,10 @@ on:
 env:
   JAVA_VERSION: '21'
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: cargarage-os-service
-  EKS_CLUSTER_NAME: cargarage-cluster
-  TF_CLOUD_ORGANIZATION: fiap-techchallenge
-  TF_WORKSPACE: cargarage-infra-database
+  ECR_REPOSITORY: cargarage-app
+  EKS_CLUSTER_NAME: cargarage-eks-prod
+  TF_CLOUD_ORGANIZATION: fiap-soat-techchallenge
+  TF_WORKSPACE: fiap-techchallenge-infra-database
 
 jobs:
   build-and-push:
