@@ -111,78 +111,39 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Organization: ${TF_ORG}"
-          echo "Workspace: ${TF_WORKSPACE}"
-
           # Get workspace ID
-          WORKSPACE_RESPONSE=$(curl -s \
+          WORKSPACE_ID=$(curl -sf \
             --header "Authorization: Bearer ${TF_API_TOKEN}" \
             --header "Content-Type: application/vnd.api+json" \
-            "https://app.terraform.io/api/v2/organizations/${TF_ORG}/workspaces/${TF_WORKSPACE}")
-
-          WORKSPACE_ID=$(echo "$WORKSPACE_RESPONSE" | jq -r '.data.id')
-          echo "Workspace ID: ${WORKSPACE_ID}"
-
-          if [[ "$WORKSPACE_ID" == "null" || -z "$WORKSPACE_ID" ]]; then
-            echo "Error fetching workspace. Response:"
-            echo "$WORKSPACE_RESPONSE" | jq .
-            exit 1
-          fi
+            "https://app.terraform.io/api/v2/organizations/${TF_ORG}/workspaces/${TF_WORKSPACE}" \
+            | jq -r '.data.id')
 
           # Get current state version
-          STATE_RESPONSE=$(curl -s \
+          STATE_VERSION_ID=$(curl -sf \
             --header "Authorization: Bearer ${TF_API_TOKEN}" \
             --header "Content-Type: application/vnd.api+json" \
-            "https://app.terraform.io/api/v2/workspaces/${WORKSPACE_ID}/current-state-version")
+            "https://app.terraform.io/api/v2/workspaces/${WORKSPACE_ID}/current-state-version" \
+            | jq -r '.data.id')
 
-          STATE_VERSION_ID=$(echo "$STATE_RESPONSE" | jq -r '.data.id')
-          echo "State Version ID: ${STATE_VERSION_ID}"
-
-          if [[ "$STATE_VERSION_ID" == "null" || -z "$STATE_VERSION_ID" ]]; then
-            echo "Error fetching state version. Response:"
-            echo "$STATE_RESPONSE" | jq .
-            exit 1
-          fi
-
-          # Get outputs from state version (with pagination to get all outputs)
-          OUTPUTS=$(curl -s \
+          # Get outputs from state version
+          OUTPUTS=$(curl -sf \
             --header "Authorization: Bearer ${TF_API_TOKEN}" \
             --header "Content-Type: application/vnd.api+json" \
             "https://app.terraform.io/api/v2/state-versions/${STATE_VERSION_ID}/outputs?page%5Bsize%5D=100")
-
-          echo "Available outputs ($(echo "$OUTPUTS" | jq '.data | length')):"
-          echo "$OUTPUTS" | jq -r '.data[].attributes.name'
 
           # Helper function to extract value by output name
           get_output() {
             echo "$OUTPUTS" | jq -r --arg name "$1" '.data[] | select(.attributes.name == $name) | .attributes.value // empty'
           }
 
-          # Extract outputs
-          DB_URL=$(get_output "os_service_jdbc_url")
-          IRSA_ROLE_ARN=$(get_output "os_service_irsa_role_arn")
-          SQS_OS_EVENTS=$(get_output "sqs_os_events_queue_url")
-          SQS_QUOTE_APPROVED=$(get_output "sqs_quote_approved_queue_url")
-          SQS_EXECUTION_COMPLETED=$(get_output "sqs_execution_completed_queue_url")
-          SQS_PAYMENT_FAILED=$(get_output "sqs_payment_failed_queue_url")
-          SQS_RESOURCE_UNAVAILABLE=$(get_output "sqs_resource_unavailable_queue_url")
-
-          echo "Extracted values:"
-          echo "DB_URL: ${DB_URL:-EMPTY}"
-          echo "IRSA_ROLE_ARN: ${IRSA_ROLE_ARN:-EMPTY}"
-          echo "SQS_OS_EVENTS: ${SQS_OS_EVENTS:-EMPTY}"
-          echo "SQS_QUOTE_APPROVED: ${SQS_QUOTE_APPROVED:-EMPTY}"
-
-          # Export outputs
-          echo "DB_URL=${DB_URL}" >> $GITHUB_OUTPUT
-          echo "IRSA_ROLE_ARN=${IRSA_ROLE_ARN}" >> $GITHUB_OUTPUT
-          echo "SQS_OS_EVENTS=${SQS_OS_EVENTS}" >> $GITHUB_OUTPUT
-          echo "SQS_QUOTE_APPROVED=${SQS_QUOTE_APPROVED}" >> $GITHUB_OUTPUT
-          echo "SQS_EXECUTION_COMPLETED=${SQS_EXECUTION_COMPLETED}" >> $GITHUB_OUTPUT
-          echo "SQS_PAYMENT_FAILED=${SQS_PAYMENT_FAILED}" >> $GITHUB_OUTPUT
-          echo "SQS_RESOURCE_UNAVAILABLE=${SQS_RESOURCE_UNAVAILABLE}" >> $GITHUB_OUTPUT
-
-          echo "Infrastructure outputs parsed successfully!"
+          # Extract and export outputs
+          echo "DB_URL=$(get_output 'os_service_jdbc_url')" >> $GITHUB_OUTPUT
+          echo "IRSA_ROLE_ARN=$(get_output 'os_service_irsa_role_arn')" >> $GITHUB_OUTPUT
+          echo "SQS_OS_EVENTS=$(get_output 'sqs_os_events_queue_url')" >> $GITHUB_OUTPUT
+          echo "SQS_QUOTE_APPROVED=$(get_output 'sqs_quote_approved_queue_url')" >> $GITHUB_OUTPUT
+          echo "SQS_EXECUTION_COMPLETED=$(get_output 'sqs_execution_completed_queue_url')" >> $GITHUB_OUTPUT
+          echo "SQS_PAYMENT_FAILED=$(get_output 'sqs_payment_failed_queue_url')" >> $GITHUB_OUTPUT
+          echo "SQS_RESOURCE_UNAVAILABLE=$(get_output 'sqs_resource_unavailable_queue_url')" >> $GITHUB_OUTPUT
 
       - name: Update kubeconfig for EKS
         run: |
@@ -237,14 +198,62 @@ jobs:
           # Wait for rollout
           kubectl rollout status deployment/os-service -n os-service --timeout=300s
 
-      - name: Verify deployment
+      - name: Get deployment info
+        id: deployment-info
         run: |
-          kubectl get pods -n os-service
-          kubectl get svc -n os-service
+          # Get LoadBalancer external IP/hostname
+          EXTERNAL_HOST=$(kubectl get svc os-service -n os-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+          if [[ -z "$EXTERNAL_HOST" ]]; then
+            EXTERNAL_HOST=$(kubectl get svc os-service -n os-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+          fi
+          echo "external-host=${EXTERNAL_HOST}" >> $GITHUB_OUTPUT
 
-      - name: Notify deployment success
+          # Get pod status
+          READY_PODS=$(kubectl get pods -n os-service -l app=os-service --no-headers | grep -c Running || echo "0")
+          TOTAL_PODS=$(kubectl get pods -n os-service -l app=os-service --no-headers | wc -l)
+          echo "pods=${READY_PODS}/${TOTAL_PODS}" >> $GITHUB_OUTPUT
+
+      - name: Generate deployment summary
         if: success()
-        run: echo "Production deployment completed successfully!"
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image-uri }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
+          EXTERNAL_HOST: ${{ steps.deployment-info.outputs.external-host }}
+          PODS: ${{ steps.deployment-info.outputs.pods }}
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🚀 Deployment Summary
+
+          | Metric | Value |
+          |--------|-------|
+          | **Environment** | \`${{ github.event.inputs.environment || 'staging' }}\` |
+          | **Image** | \`${IMAGE_TAG}\` |
+          | **Pods Ready** | ${PODS} |
+          | **Cluster** | \`${{ env.EKS_CLUSTER_NAME }}\` |
+          | **Namespace** | \`os-service\` |
+
+          ### 🔗 API Access
+
+          | Endpoint | URL |
+          |----------|-----|
+          | **Base URL** | \`http://${EXTERNAL_HOST}:8080\` |
+          | **Swagger UI** | [Open Swagger](http://${EXTERNAL_HOST}:8080/swagger-ui.html) |
+          | **OpenAPI Spec** | [Download JSON](http://${EXTERNAL_HOST}:8080/v3/api-docs) |
+          | **Health Check** | \`http://${EXTERNAL_HOST}:8080/actuator/health\` |
+
+          ### 📋 Quick Test Commands
+
+          \`\`\`bash
+          # Health check
+          curl -s http://${EXTERNAL_HOST}:8080/actuator/health | jq .
+
+          # Get service orders
+          curl -s http://${EXTERNAL_HOST}:8080/api/v1/service-orders | jq .
+          \`\`\`
+
+          ---
+          *Deployed at $(date -u '+%Y-%m-%d %H:%M:%S UTC') by @${{ github.actor }}*
+          EOF
 
       - name: Rollback on failure
         if: failure()
