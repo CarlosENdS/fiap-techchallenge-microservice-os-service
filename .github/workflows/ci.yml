@@ -38,19 +38,138 @@ jobs:
             ${{ runner.os }}-maven-
 
       - name: Build with Maven
+        id: build_step
         run: mvn clean compile -B
 
       - name: Run Unit Tests
+        id: unit_tests
         run: mvn test -B
 
       - name: Run Integration Tests
+        id: integration_tests
         run: mvn verify -DskipUnitTests -B
 
       - name: Generate JaCoCo Report
+        id: jacoco_report
         run: mvn jacoco:report -B
 
       - name: Check Code Coverage
+        id: jacoco_check
         run: mvn jacoco:check -B
+
+      - name: CI Build Summary
+        if: always()
+        run: |
+          python3 <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+          if not summary_file:
+            raise SystemExit(0)
+
+          def outcome(step_id):
+            value = os.environ.get(step_id, "skipped")
+            emoji = {
+              "success": "✅",
+              "failure": "❌",
+              "cancelled": "⚪",
+              "skipped": "⏭️"
+            }.get(value, "ℹ️")
+            return f"{emoji} {value}"
+
+          def parse_pom_thresholds(pom_path):
+            thresholds = {}
+            try:
+              tree = ET.parse(pom_path)
+              root = tree.getroot()
+              for elem in root.iter():
+                if elem.tag.endswith('artifactId') and (elem.text or '').strip() == 'jacoco-maven-plugin':
+                  plugin = elem
+                  break
+              else:
+                return thresholds
+
+              plugin_node = plugin
+              while plugin_node is not None and not plugin_node.tag.endswith('plugin'):
+                plugin_node = next((p for p in root.iter() if plugin in list(p)), None)
+                break
+
+              if plugin_node is None:
+                return thresholds
+
+              for limit in plugin_node.iter():
+                if not limit.tag.endswith('limit'):
+                  continue
+                counter = None
+                minimum = None
+                for child in list(limit):
+                  if child.tag.endswith('counter'):
+                    counter = (child.text or '').strip()
+                  if child.tag.endswith('minimum'):
+                    minimum = (child.text or '').strip()
+                if counter and minimum:
+                  try:
+                    thresholds[counter] = float(minimum)
+                  except ValueError:
+                    pass
+            except Exception:
+              pass
+            return thresholds
+
+          def parse_jacoco_metrics(xml_path):
+            metrics = {}
+            try:
+              tree = ET.parse(xml_path)
+              root = tree.getroot()
+              for counter in root.findall('counter'):
+                ctype = counter.attrib.get('type')
+                missed = int(counter.attrib.get('missed', 0))
+                covered = int(counter.attrib.get('covered', 0))
+                total = missed + covered
+                ratio = (covered / total) if total > 0 else 0.0
+                metrics[ctype] = ratio
+            except Exception:
+              pass
+            return metrics
+
+          thresholds = parse_pom_thresholds('pom.xml')
+          metrics = parse_jacoco_metrics('target/site/jacoco/jacoco.xml')
+
+          with open(summary_file, 'a', encoding='utf-8') as f:
+            f.write('## CI Summary - Build and Test\\n\\n')
+            f.write('| Etapa | Resultado |\\n')
+            f.write('|---|---|\\n')
+            f.write(f"| Build | {outcome('BUILD_OUTCOME')} |\\n")
+            f.write(f"| Unit Tests | {outcome('UNIT_OUTCOME')} |\\n")
+            f.write(f"| Integration Tests | {outcome('INTEGRATION_OUTCOME')} |\\n")
+            f.write(f"| JaCoCo Report | {outcome('JACOCO_REPORT_OUTCOME')} |\\n")
+            f.write(f"| JaCoCo Check | {outcome('JACOCO_CHECK_OUTCOME')} |\\n\\n")
+
+            f.write('### Cobertura de testes (JaCoCo)\\n\\n')
+            f.write('| Métrica | Cobertura Atual | Threshold | Status |\\n')
+            f.write('|---|---:|---:|---|\\n')
+
+            for metric in ['INSTRUCTION', 'BRANCH', 'LINE']:
+              current = metrics.get(metric)
+              threshold = thresholds.get(metric)
+
+              current_txt = f"{current * 100:.2f}%" if current is not None else 'n/a'
+              threshold_txt = f"{threshold * 100:.2f}%" if threshold is not None else 'n/a'
+
+              if current is None or threshold is None:
+                status = 'ℹ️ n/a'
+              else:
+                status = '✅ ok' if current >= threshold else '❌ abaixo'
+
+              f.write(f"| {metric} | {current_txt} | {threshold_txt} | {status} |\\n")
+          PY
+        env:
+          BUILD_OUTCOME: ${{ steps.build_step.outcome }}
+          UNIT_OUTCOME: ${{ steps.unit_tests.outcome }}
+          INTEGRATION_OUTCOME: ${{ steps.integration_tests.outcome }}
+          JACOCO_REPORT_OUTCOME: ${{ steps.jacoco_report.outcome }}
+          JACOCO_CHECK_OUTCOME: ${{ steps.jacoco_check.outcome }}
 
       - name: Upload Coverage Report
         uses: actions/upload-artifact@v4
@@ -89,12 +208,26 @@ jobs:
           cache: maven
 
       - name: Run Checkstyle
+        id: checkstyle
         run: mvn checkstyle:check -B
         continue-on-error: true
 
       - name: Run SpotBugs
+        id: spotbugs
         run: mvn spotbugs:check -B
         continue-on-error: true
+
+      - name: Code Quality Summary
+        if: always()
+        run: |
+          {
+            echo "## CI Summary - Code Quality"
+            echo
+            echo "| Etapa | Resultado |"
+            echo "|---|---|"
+            echo "| Checkstyle | ${{ steps.checkstyle.outcome }} |"
+            echo "| SpotBugs | ${{ steps.spotbugs.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   security-scan:
     name: Security Scan
@@ -116,6 +249,7 @@ jobs:
           cache: maven
 
       - name: OWASP Dependency Check
+        id: owasp
         run: mvn org.owasp:dependency-check-maven:check -B
         continue-on-error: true
 
@@ -125,6 +259,17 @@ jobs:
           name: security-report
           path: app/target/dependency-check-report.html
           retention-days: 7
+
+      - name: Security Summary
+        if: always()
+        run: |
+          {
+            echo "## CI Summary - Security"
+            echo
+            echo "| Etapa | Resultado |"
+            echo "|---|---|"
+            echo "| OWASP Dependency Check | ${{ steps.owasp.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   docker-build:
     name: Build Docker Image
@@ -177,6 +322,7 @@ jobs:
           cache: maven
 
       - name: Run Cucumber BDD Tests
+        id: bdd
         run: mvn test -Dcucumber.filter.tags="not @ignore" -B
 
       - name: Upload Cucumber Report
@@ -185,3 +331,14 @@ jobs:
           name: cucumber-report
           path: app/target/cucumber-reports/
           retention-days: 7
+
+      - name: BDD Summary
+        if: always()
+        run: |
+          {
+            echo "## CI Summary - BDD"
+            echo
+            echo "| Etapa | Resultado |"
+            echo "|---|---|"
+            echo "| Cucumber BDD Tests | ${{ steps.bdd.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
