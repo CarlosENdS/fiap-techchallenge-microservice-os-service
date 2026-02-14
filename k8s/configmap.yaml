@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: os-service-config
+  namespace: os-service
+data:
+  # Server Configuration
+  SERVER_PORT: "8080"
+  SERVER_SERVLET_CONTEXT_PATH: "/api/os-service"
+  
+  # Database Configuration
+  SPRING_JPA_HIBERNATE_DDL_AUTO: "none"
+  SPRING_JPA_SHOW_SQL: "false"
+  
+  # AWS Configuration
+  AWS_REGION: "us-east-1"
+  
+  # SQS Queue Names (populated by CD pipeline from Terraform Cloud outputs)
+  SQS_QUOTE_APPROVED_QUEUE: "__SQS_QUOTE_APPROVED_QUEUE__"
+  SQS_EXECUTION_COMPLETED_QUEUE: "__SQS_EXECUTION_COMPLETED_QUEUE__"
+  SQS_PAYMENT_FAILED_QUEUE: "__SQS_PAYMENT_FAILED_QUEUE__"
+  SQS_RESOURCE_UNAVAILABLE_QUEUE: "__SQS_RESOURCE_UNAVAILABLE_QUEUE__"
+  
+  # Actuator Configuration
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics,prometheus"
+  MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "always"
