@@ -111,35 +111,68 @@ jobs:
           organization: ${{ env.TF_CLOUD_ORGANIZATION }}
           workspace: ${{ env.TF_WORKSPACE }}
 
+      - name: Mask infrastructure outputs
+        env:
+          TF_OUTPUTS_JSON: ${{ steps.tf-outputs.outputs.workspace-outputs-json }}
+        run: |
+          # Mask the entire JSON output to prevent it from appearing in subsequent logs
+          echo "::add-mask::${TF_OUTPUTS_JSON}"
+
+          # Extract and mask individual sensitive values
+          for value in $(echo "$TF_OUTPUTS_JSON" | jq -r '.outputs[].value // empty' 2>/dev/null); do
+            if [[ -n "$value" && "$value" != "null" ]]; then
+              echo "::add-mask::${value}"
+            fi
+          done
+
       - name: Parse Terraform outputs
         id: parsed-outputs
+        env:
+          TF_OUTPUTS_JSON: ${{ steps.tf-outputs.outputs.workspace-outputs-json }}
         run: |
-          # Parse outputs from tfc-workflows action
-          OUTPUTS='${{ steps.tf-outputs.outputs.workspace-outputs }}'
-          
-          RDS_ENDPOINT=$(echo "$OUTPUTS" | jq -r '.rds_endpoint.value')
-          OS_DB_NAME=$(echo "$OUTPUTS" | jq -r '.os_service_database_name.value')
-          OS_DB_USERNAME=$(echo "$OUTPUTS" | jq -r '.os_service_database_username.value')
-          IRSA_ROLE_ARN=$(echo "$OUTPUTS" | jq -r '.os_service_irsa_role_arn.value')
-          SQS_OS_EVENTS=$(echo "$OUTPUTS" | jq -r '.sqs_os_events_queue_url.value')
-          SQS_QUOTE_APPROVED=$(echo "$OUTPUTS" | jq -r '.sqs_quote_approved_queue_url.value')
-          SQS_EXECUTION_COMPLETED=$(echo "$OUTPUTS" | jq -r '.sqs_execution_completed_queue_url.value')
-          SQS_PAYMENT_FAILED=$(echo "$OUTPUTS" | jq -r '.sqs_payment_failed_queue_url.value')
-          SQS_RESOURCE_UNAVAILABLE=$(echo "$OUTPUTS" | jq -r '.sqs_resource_unavailable_queue_url.value')
-          
-          # Build DB URL (RDS endpoint already includes port)
-          DB_URL="jdbc:postgresql://${RDS_ENDPOINT}/${OS_DB_NAME}"
-          
-          # Export outputs
+          set -euo pipefail
+
+          # Helper function to extract value from outputs array by name
+          get_output() {
+            local val
+            val=$(echo "$TF_OUTPUTS_JSON" | jq -r --arg name "$1" '.outputs[] | select(.name == $name) | .value // empty')
+            # Return empty if null
+            if [[ "$val" == "null" ]]; then
+              echo ""
+            else
+              echo "$val"
+            fi
+          }
+
+          # Parse outputs from tfc-workflows action (array format)
+          IRSA_ROLE_ARN=$(get_output "os_service_irsa_role_arn")
+          SQS_OS_EVENTS=$(get_output "sqs_os_events_queue_url")
+          SQS_QUOTE_APPROVED=$(get_output "sqs_quote_approved_queue_url")
+          SQS_EXECUTION_COMPLETED=$(get_output "sqs_execution_completed_queue_url")
+          SQS_PAYMENT_FAILED=$(get_output "sqs_payment_failed_queue_url")
+          SQS_RESOURCE_UNAVAILABLE=$(get_output "sqs_resource_unavailable_queue_url")
+
+          # Use pre-built JDBC URL from Terraform
+          DB_URL=$(get_output "os_service_jdbc_url")
+
+          # Mask all sensitive values in logs
+          echo "::add-mask::${DB_URL}"
+          echo "::add-mask::${IRSA_ROLE_ARN}"
+          echo "::add-mask::${SQS_OS_EVENTS}"
+          echo "::add-mask::${SQS_QUOTE_APPROVED}"
+          echo "::add-mask::${SQS_EXECUTION_COMPLETED}"
+          echo "::add-mask::${SQS_PAYMENT_FAILED}"
+          echo "::add-mask::${SQS_RESOURCE_UNAVAILABLE}"
+
+          # Export outputs (DB_USERNAME and DB_PASSWORD come from secrets)
           echo "DB_URL=${DB_URL}" >> $GITHUB_OUTPUT
-          echo "DB_USERNAME=${OS_DB_USERNAME}" >> $GITHUB_OUTPUT
           echo "IRSA_ROLE_ARN=${IRSA_ROLE_ARN}" >> $GITHUB_OUTPUT
           echo "SQS_OS_EVENTS=${SQS_OS_EVENTS}" >> $GITHUB_OUTPUT
           echo "SQS_QUOTE_APPROVED=${SQS_QUOTE_APPROVED}" >> $GITHUB_OUTPUT
           echo "SQS_EXECUTION_COMPLETED=${SQS_EXECUTION_COMPLETED}" >> $GITHUB_OUTPUT
           echo "SQS_PAYMENT_FAILED=${SQS_PAYMENT_FAILED}" >> $GITHUB_OUTPUT
           echo "SQS_RESOURCE_UNAVAILABLE=${SQS_RESOURCE_UNAVAILABLE}" >> $GITHUB_OUTPUT
-          
+
           echo "Infrastructure outputs parsed successfully!"
 
       - name: Update kubeconfig for EKS
@@ -147,24 +180,50 @@ jobs:
           aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
       - name: Prepare Kubernetes manifests
+        env:
+          DB_URL: ${{ steps.parsed-outputs.outputs.DB_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SQS_OS_EVENTS: ${{ steps.parsed-outputs.outputs.SQS_OS_EVENTS }}
+          SQS_QUOTE_APPROVED: ${{ steps.parsed-outputs.outputs.SQS_QUOTE_APPROVED }}
+          SQS_EXECUTION_COMPLETED: ${{ steps.parsed-outputs.outputs.SQS_EXECUTION_COMPLETED }}
+          SQS_PAYMENT_FAILED: ${{ steps.parsed-outputs.outputs.SQS_PAYMENT_FAILED }}
+          SQS_RESOURCE_UNAVAILABLE: ${{ steps.parsed-outputs.outputs.SQS_RESOURCE_UNAVAILABLE }}
+          IRSA_ROLE_ARN: ${{ steps.parsed-outputs.outputs.IRSA_ROLE_ARN }}
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image-uri }}
         run: |
+          set -euo pipefail
+
+          # Mask sensitive values
+          echo "::add-mask::${DB_URL}"
+          echo "::add-mask::${DB_USERNAME}"
+          echo "::add-mask::${DB_PASSWORD}"
+          echo "::add-mask::${SQS_OS_EVENTS}"
+          echo "::add-mask::${SQS_QUOTE_APPROVED}"
+          echo "::add-mask::${SQS_EXECUTION_COMPLETED}"
+          echo "::add-mask::${SQS_PAYMENT_FAILED}"
+          echo "::add-mask::${SQS_RESOURCE_UNAVAILABLE}"
+          echo "::add-mask::${IRSA_ROLE_ARN}"
+
           # Substitute values in secrets.yaml using sed
-          sed -i "s|__DB_URL_B64__|$(echo -n '${{ steps.parsed-outputs.outputs.DB_URL }}' | base64 -w0)|g" k8s/secrets.yaml
-          sed -i "s|__DB_USERNAME_B64__|$(echo -n '${{ steps.parsed-outputs.outputs.DB_USERNAME }}' | base64 -w0)|g" k8s/secrets.yaml
-          sed -i "s|__DB_PASSWORD_B64__|$(echo -n '${{ secrets.DB_PASSWORD }}' | base64 -w0)|g" k8s/secrets.yaml
-          sed -i "s|__SQS_OS_EVENTS_QUEUE_URL_B64__|$(echo -n '${{ steps.parsed-outputs.outputs.SQS_OS_EVENTS }}' | base64 -w0)|g" k8s/secrets.yaml
-          
+          sed -i "s|__DB_URL_B64__|$(echo -n "${DB_URL}" | base64 -w0)|g" k8s/secrets.yaml
+          sed -i "s|__DB_USERNAME_B64__|$(echo -n "${DB_USERNAME}" | base64 -w0)|g" k8s/secrets.yaml
+          sed -i "s|__DB_PASSWORD_B64__|$(echo -n "${DB_PASSWORD}" | base64 -w0)|g" k8s/secrets.yaml
+          sed -i "s|__SQS_OS_EVENTS_QUEUE_URL_B64__|$(echo -n "${SQS_OS_EVENTS}" | base64 -w0)|g" k8s/secrets.yaml
+
           # Substitute values in configmap.yaml
-          sed -i "s|__SQS_QUOTE_APPROVED_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_QUOTE_APPROVED }}|g" k8s/configmap.yaml
-          sed -i "s|__SQS_EXECUTION_COMPLETED_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_EXECUTION_COMPLETED }}|g" k8s/configmap.yaml
-          sed -i "s|__SQS_PAYMENT_FAILED_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_PAYMENT_FAILED }}|g" k8s/configmap.yaml
-          sed -i "s|__SQS_RESOURCE_UNAVAILABLE_QUEUE__|${{ steps.parsed-outputs.outputs.SQS_RESOURCE_UNAVAILABLE }}|g" k8s/configmap.yaml
-          
+          sed -i "s|__SQS_QUOTE_APPROVED_QUEUE__|${SQS_QUOTE_APPROVED}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_EXECUTION_COMPLETED_QUEUE__|${SQS_EXECUTION_COMPLETED}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_PAYMENT_FAILED_QUEUE__|${SQS_PAYMENT_FAILED}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_RESOURCE_UNAVAILABLE_QUEUE__|${SQS_RESOURCE_UNAVAILABLE}|g" k8s/configmap.yaml
+
           # Substitute values in service-account.yaml
-          sed -i "s|__IRSA_ROLE_ARN__|${{ steps.parsed-outputs.outputs.IRSA_ROLE_ARN }}|g" k8s/service-account.yaml
-          
+          sed -i "s|__IRSA_ROLE_ARN__|${IRSA_ROLE_ARN}|g" k8s/service-account.yaml
+
           # Substitute image in deployment
-          sed -i "s|__IMAGE_URI__|${{ needs.build-and-push.outputs.image-uri }}|g" k8s/app-deployment.yaml
+          sed -i "s|__IMAGE_URI__|${IMAGE_URI}|g" k8s/app-deployment.yaml
+
+          echo "Kubernetes manifests prepared successfully"
 
       - name: Deploy to Kubernetes
         run: |
