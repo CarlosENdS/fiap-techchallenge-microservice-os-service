@@ -157,16 +157,18 @@ public class SqsEventPublisher implements ServiceOrderEventPublisher {
 
             sqsClient.sendMessage(request);
             log.info("Published ORDER_CREATED to billing queue for order: {} with {} item(s)",
-                    order.id(), billingPayload.get("items") != null ?
-                    ((List<?>) billingPayload.get("items")).size() : 0);
+                    order.id(),
+                    billingPayload.get("items") != null ? ((List<?>) billingPayload.get("items")).size() : 0);
         } catch (Exception e) {
             log.error("Error publishing to billing queue for order: {}", order.id(), e);
         }
     }
 
     /**
-     * Builds the items array for the Billing payload from ServiceOrder services + resources.
-     * Each item follows the Billing contract: {type, itemCode, description, quantity, unitPrice}.
+     * Builds the items array for the Billing payload from ServiceOrder services +
+     * resources.
+     * Each item follows the Billing contract: {type, itemCode, description,
+     * quantity, unitPrice}.
      */
     private List<Map<String, Object>> buildBillingItems(ServiceOrder order) {
         List<Map<String, Object>> items = new ArrayList<>();
