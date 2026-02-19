@@ -40,7 +40,7 @@ Ajuste conforme sua configuração:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: cargarage-os-service
-  EKS_CLUSTER_NAME: cargarage-cluster
+  EKS_CLUSTER_NAME: cargarage-eks-prod
   TF_CLOUD_ORGANIZATION: fiap-techchallenge
   TF_WORKSPACE: cargarage-infra-database
 ```
