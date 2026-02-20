@@ -24,16 +24,18 @@ public class OpenApiConfiguration {
     @Value("${app.swagger.server-url:}")
     private String serverUrl;
 
+    @Value("${server.servlet.context-path:/api/os-service}")
+    private String contextPath;
+
     @Bean
     public OpenAPI customOpenAPI() {
         Server server = new Server();
 
-        // Use configured URL or empty string for relative path (current host)
         if (serverUrl != null && !serverUrl.isBlank()) {
             server.url(serverUrl).description("API Server");
         } else {
-            // Empty URL makes Swagger use the current host/origin
-            server.url("").description("Current Server");
+            // Use the context-path so Swagger UI sends requests to the correct base
+            server.url(contextPath).description("Current Server");
         }
 
         return new OpenAPI()
