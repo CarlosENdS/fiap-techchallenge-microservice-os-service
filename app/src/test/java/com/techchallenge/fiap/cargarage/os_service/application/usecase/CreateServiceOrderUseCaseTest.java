@@ -41,7 +41,7 @@ class CreateServiceOrderUseCaseTest {
     }
 
     @Test
-    @DisplayName("Should create service order with RECEIVED status")
+    @DisplayName("Should create service order and auto-advance to WAITING_APPROVAL when quote is complete")
     void shouldCreateServiceOrderWithReceivedStatus() {
         // Arrange
         Long customerId = 1L;
@@ -81,6 +81,7 @@ class CreateServiceOrderUseCaseTest {
             ServiceOrder order = invocation.getArgument(0);
             return order.withId(100L);
         });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
         ServiceOrder result = useCase.execute(requestDto);
@@ -90,12 +91,15 @@ class CreateServiceOrderUseCaseTest {
         assertNotNull(result.id());
         assertEquals(customerId, result.customerId());
         assertEquals(vehicleId, result.vehicleId());
-        assertEquals(ServiceOrderStatus.received().value(), result.status().value());
+        // Auto-advance: order with complete quote (services+resources with prices)
+        // transitions RECEIVED → IN_DIAGNOSIS → WAITING_APPROVAL
+        assertEquals(ServiceOrderStatus.waitingApproval().value(), result.status().value());
         assertEquals(1, result.services().size());
         assertEquals(1, result.resources().size());
 
-        // Verify event was published
+        // Verify events were published (ORDER_CREATED + ORDER_WAITING_APPROVAL)
         verify(eventPublisher).publishOrderCreated(any(ServiceOrder.class));
+        verify(eventPublisher).publishOrderWaitingApproval(any(ServiceOrder.class));
     }
 
     @Test
@@ -143,6 +147,7 @@ class CreateServiceOrderUseCaseTest {
             ServiceOrder order = invocation.getArgument(0);
             return order.withId(100L);
         });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
         useCase.execute(requestDto);
