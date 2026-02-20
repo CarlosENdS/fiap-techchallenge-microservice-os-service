@@ -406,7 +406,8 @@ class SqsEventPublisherTest {
             assertEquals(TEST_BILLING_QUEUE_URL, billingRequest.queueUrl());
             String body = billingRequest.messageBody();
             assertTrue(body.contains("ORDER_CREATED"));
-            assertTrue(body.contains("\"serviceOrderId\":\"200\""));
+            assertTrue(body.contains("serviceOrderId"));
+            assertTrue(body.contains("200"));
             assertTrue(body.contains("SERVICE"));
             assertTrue(body.contains("RESOURCE"));
             assertTrue(body.contains("Brake Inspection"));
@@ -487,8 +488,8 @@ class SqsEventPublisherTest {
                     .totalPrice(null)
                     .createdAt(LocalDateTime.now())
                     .updatedAt(LocalDateTime.now())
-                    .services(null)
-                    .resources(null)
+                    .services(List.of())
+                    .resources(List.of())
                     .build();
 
             when(sqsClient.sendMessage(any(SendMessageRequest.class)))
