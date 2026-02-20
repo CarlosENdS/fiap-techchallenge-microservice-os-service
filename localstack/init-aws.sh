@@ -12,6 +12,9 @@ awslocal sqs create-queue \
   --queue-name os-order-events-queue.fifo \
   --attributes FifoQueue=true,ContentBasedDeduplication=false
 
+# Create standard queue for billing service (OS -> Billing)
+awslocal sqs create-queue --queue-name service-order-events
+
 # Create standard queues for inbound events (Saga pattern)
 awslocal sqs create-queue --queue-name quote-approved-queue
 awslocal sqs create-queue --queue-name execution-completed-queue

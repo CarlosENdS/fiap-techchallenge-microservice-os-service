@@ -134,6 +134,7 @@ public class ServiceOrderSteps {
             ServiceOrder order = invocation.getArgument(0);
             return order.withId(1L);
         });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         currentOrder = createUseCase.execute(request);
     }

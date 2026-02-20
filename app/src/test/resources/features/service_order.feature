@@ -8,8 +8,9 @@ Funcionalidade: Gerenciamento de Ordens de Serviço (OS)
     Dado que existe um cliente com ID válido
     E existe um veículo com ID válido
     Quando eu criar uma nova ordem de serviço com reclamação "Barulho no motor"
-    Então a ordem de serviço deve ser criada com status "RECEIVED"
+    Então a ordem de serviço deve ser criada com status "WAITING_APPROVAL"
     E um evento de criação deve ser publicado
+    E um evento de aguardando aprovação deve ser publicado
 
   Cenário: Atualizar status da ordem de serviço para diagnóstico
     Dado que existe uma ordem de serviço com status "RECEIVED"

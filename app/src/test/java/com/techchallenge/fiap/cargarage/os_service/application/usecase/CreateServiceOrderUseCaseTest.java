@@ -41,7 +41,7 @@ class CreateServiceOrderUseCaseTest {
     }
 
     @Test
-    @DisplayName("Should create service order with RECEIVED status")
+    @DisplayName("Should create service order and auto-advance to WAITING_APPROVAL when quote is complete")
     void shouldCreateServiceOrderWithReceivedStatus() {
         // Arrange
         Long customerId = 1L;
@@ -81,6 +81,7 @@ class CreateServiceOrderUseCaseTest {
             ServiceOrder order = invocation.getArgument(0);
             return order.withId(100L);
         });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
         ServiceOrder result = useCase.execute(requestDto);
@@ -90,12 +91,15 @@ class CreateServiceOrderUseCaseTest {
         assertNotNull(result.id());
         assertEquals(customerId, result.customerId());
         assertEquals(vehicleId, result.vehicleId());
-        assertEquals(ServiceOrderStatus.received().value(), result.status().value());
+        // Auto-advance: order with complete quote (services+resources with prices)
+        // transitions RECEIVED → IN_DIAGNOSIS → WAITING_APPROVAL
+        assertEquals(ServiceOrderStatus.waitingApproval().value(), result.status().value());
         assertEquals(1, result.services().size());
         assertEquals(1, result.resources().size());
 
-        // Verify event was published
+        // Verify events were published (ORDER_CREATED + ORDER_WAITING_APPROVAL)
         verify(eventPublisher).publishOrderCreated(any(ServiceOrder.class));
+        verify(eventPublisher).publishOrderWaitingApproval(any(ServiceOrder.class));
     }
 
     @Test
@@ -143,6 +147,7 @@ class CreateServiceOrderUseCaseTest {
             ServiceOrder order = invocation.getArgument(0);
             return order.withId(100L);
         });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
         useCase.execute(requestDto);
@@ -180,5 +185,187 @@ class CreateServiceOrderUseCaseTest {
         assertEquals(BigDecimal.ZERO, result.totalPrice());
         assertTrue(result.services().isEmpty());
         assertTrue(result.resources().isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should create order with null services and null resources lists")
+    void shouldCreateOrderWithNullServicesAndResources() {
+        // Arrange
+        ServiceOrderRequestDto requestDto = ServiceOrderRequestDto.builder()
+                .customerId(1L)
+                .vehicleId(2L)
+                .description("Null lists")
+                .services(null)
+                .resources(null)
+                .build();
+
+        when(gateway.insert(any(ServiceOrder.class))).thenAnswer(invocation -> {
+            ServiceOrder order = invocation.getArgument(0);
+            return order.withId(100L);
+        });
+
+        // Act
+        ServiceOrder result = useCase.execute(requestDto);
+
+        // Assert
+        assertNotNull(result);
+        assertEquals(BigDecimal.ZERO, result.totalPrice());
+        assertTrue(result.services().isEmpty());
+        assertTrue(result.resources().isEmpty());
+        // No auto-advance (no items = no complete quote)
+        assertEquals(ServiceOrderStatus.received().value(), result.status().value());
+        verify(eventPublisher).publishOrderCreated(any(ServiceOrder.class));
+        verify(eventPublisher, never()).publishOrderWaitingApproval(any(ServiceOrder.class));
+    }
+
+    @Test
+    @DisplayName("Should handle null prices in items defaulting to zero")
+    void shouldHandleNullPricesInItems() {
+        // Arrange
+        ServiceOrderItemRequestDto itemWithNullPrice = ServiceOrderItemRequestDto.builder()
+                .serviceId(10L)
+                .serviceName("Free inspection")
+                .serviceDescription("Complimentary")
+                .price(null)
+                .quantity(1)
+                .build();
+
+        ServiceOrderResourceRequestDto resourceWithNullPrice = ServiceOrderResourceRequestDto.builder()
+                .resourceId(20L)
+                .resourceName("Free filter")
+                .resourceDescription("Promo")
+                .resourceType("PART")
+                .price(null)
+                .quantity(1)
+                .build();
+
+        ServiceOrderRequestDto requestDto = ServiceOrderRequestDto.builder()
+                .customerId(1L)
+                .vehicleId(2L)
+                .description("Null prices")
+                .services(List.of(itemWithNullPrice))
+                .resources(List.of(resourceWithNullPrice))
+                .build();
+
+        when(gateway.insert(any(ServiceOrder.class))).thenAnswer(invocation -> {
+            ServiceOrder order = invocation.getArgument(0);
+            return order.withId(100L);
+        });
+
+        // Act
+        ServiceOrder result = useCase.execute(requestDto);
+
+        // Assert
+        assertNotNull(result);
+        assertEquals(BigDecimal.ZERO, result.totalPrice());
+        assertEquals(1, result.services().size());
+        assertEquals(1, result.resources().size());
+        // No auto-advance (total == 0)
+        assertEquals(ServiceOrderStatus.received().value(), result.status().value());
+    }
+
+    @Test
+    @DisplayName("Should auto-advance with only services (no resources)")
+    void shouldAutoAdvanceWithOnlyServices() {
+        // Arrange
+        ServiceOrderItemRequestDto item = ServiceOrderItemRequestDto.builder()
+                .serviceId(10L)
+                .serviceName("Oil Change")
+                .serviceDescription("Full service")
+                .price(new BigDecimal("200.00"))
+                .quantity(1)
+                .build();
+
+        ServiceOrderRequestDto requestDto = ServiceOrderRequestDto.builder()
+                .customerId(1L)
+                .vehicleId(2L)
+                .description("Only services")
+                .services(List.of(item))
+                .resources(List.of())
+                .build();
+
+        when(gateway.insert(any(ServiceOrder.class))).thenAnswer(invocation -> {
+            ServiceOrder order = invocation.getArgument(0);
+            return order.withId(100L);
+        });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        ServiceOrder result = useCase.execute(requestDto);
+
+        // Assert — has items + total > 0 → auto-advance
+        assertEquals(ServiceOrderStatus.waitingApproval().value(), result.status().value());
+        verify(eventPublisher).publishOrderCreated(any(ServiceOrder.class));
+        verify(eventPublisher).publishOrderWaitingApproval(any(ServiceOrder.class));
+        verify(gateway, times(2)).update(any(ServiceOrder.class));
+    }
+
+    @Test
+    @DisplayName("Should auto-advance with only resources (no services)")
+    void shouldAutoAdvanceWithOnlyResources() {
+        // Arrange
+        ServiceOrderResourceRequestDto resource = ServiceOrderResourceRequestDto.builder()
+                .resourceId(20L)
+                .resourceName("Brake Pads")
+                .resourceDescription("Set of 4")
+                .resourceType("PART")
+                .price(new BigDecimal("300.00"))
+                .quantity(1)
+                .build();
+
+        ServiceOrderRequestDto requestDto = ServiceOrderRequestDto.builder()
+                .customerId(1L)
+                .vehicleId(2L)
+                .description("Only resources")
+                .services(List.of())
+                .resources(List.of(resource))
+                .build();
+
+        when(gateway.insert(any(ServiceOrder.class))).thenAnswer(invocation -> {
+            ServiceOrder order = invocation.getArgument(0);
+            return order.withId(100L);
+        });
+        when(gateway.update(any(ServiceOrder.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        ServiceOrder result = useCase.execute(requestDto);
+
+        // Assert — has items + total > 0 → auto-advance
+        assertEquals(ServiceOrderStatus.waitingApproval().value(), result.status().value());
+        verify(eventPublisher).publishOrderWaitingApproval(any(ServiceOrder.class));
+    }
+
+    @Test
+    @DisplayName("Should NOT auto-advance when items exist but total is zero")
+    void shouldNotAutoAdvanceWhenTotalIsZero() {
+        // Arrange
+        ServiceOrderItemRequestDto freeItem = ServiceOrderItemRequestDto.builder()
+                .serviceId(10L)
+                .serviceName("Free check")
+                .serviceDescription("Courtesy")
+                .price(BigDecimal.ZERO)
+                .quantity(1)
+                .build();
+
+        ServiceOrderRequestDto requestDto = ServiceOrderRequestDto.builder()
+                .customerId(1L)
+                .vehicleId(2L)
+                .description("Free items")
+                .services(List.of(freeItem))
+                .resources(List.of())
+                .build();
+
+        when(gateway.insert(any(ServiceOrder.class))).thenAnswer(invocation -> {
+            ServiceOrder order = invocation.getArgument(0);
+            return order.withId(100L);
+        });
+
+        // Act
+        ServiceOrder result = useCase.execute(requestDto);
+
+        // Assert — has items but total==0 → NO auto-advance
+        assertEquals(ServiceOrderStatus.received().value(), result.status().value());
+        verify(eventPublisher, never()).publishOrderWaitingApproval(any(ServiceOrder.class));
+        verify(gateway, never()).update(any(ServiceOrder.class));
     }
 }

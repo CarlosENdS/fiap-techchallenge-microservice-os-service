@@ -153,7 +153,6 @@ fiap-techchallenge-microservice-os-service/
 │   ├── namespace.yaml
 │   ├── configmap.yaml
 │   ├── secrets.yaml
-│   ├── postgres-deployment.yaml
 │   ├── service-account.yaml         # Service Account para IRSA
 │   ├── app-deployment.yaml
 │   ├── app-service.yaml
@@ -259,6 +258,8 @@ A Ordem de Serviço segue um fluxo de estados bem definido:
 | `FINISHED` | Serviço finalizado |
 | `DELIVERED` | Veículo entregue ao cliente |
 | `CANCELLED` | OS cancelada |
+
+> **Auto-avanço:** Quando a OS é criada com orçamento completo (serviços e recursos com preços > 0), o `CreateServiceOrderUseCase` auto-avança automaticamente de `RECEIVED → IN_DIAGNOSIS → WAITING_APPROVAL` e publica o evento `ORDER_WAITING_APPROVAL`. Isso elimina a necessidade de transições manuais via PUT para esses estados intermediários.
 
 ## 🔀 Saga Pattern
 

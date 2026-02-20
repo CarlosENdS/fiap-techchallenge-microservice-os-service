@@ -7,14 +7,15 @@ Este documento descreve os contratos **reais** usados pela aplicação para publ
 As filas são configuradas em `application.properties` com as chaves:
 
 - `messaging.sqs.queue.os-events-url`
+- `messaging.sqs.queue.billing-order-events-url`
 - `messaging.sqs.queue.quote-approved`
 - `messaging.sqs.queue.execution-completed`
 - `messaging.sqs.queue.payment-failed`
 - `messaging.sqs.queue.resource-unavailable`
 
-## Fila de saída
+## Filas de saída
 
-### `os-order-events-queue.fifo`
+### `os-order-events-queue.fifo` (FIFO)
 
 Publicada por `SqsEventPublisher`.
 
@@ -67,6 +68,61 @@ Exemplo:
 
 - `messageGroupId`: valor fixo `os-service-events`
 - `messageDeduplicationId`: formato `<orderId>-<eventType>-<timestampMillis>`
+
+### `service-order-events` (Standard — para Billing Service)
+
+Publicada por `SqsEventPublisher.publishOrderToBillingQueue()` apenas para o evento `ORDER_CREATED`.
+
+Contém payload enriquecido com itens (serviços e recursos) para o Billing Service criar o Budget automaticamente.
+
+#### Payload
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `eventType` | String | Sempre `ORDER_CREATED` |
+| `orderId` | Long | ID numérico da OS |
+| `serviceOrderId` | String | ID da OS como String (compat. Billing) |
+| `customerId` | Long | ID do cliente |
+| `customerName` | String | Nome do cliente |
+| `vehicleId` | Long | ID do veículo |
+| `vehicleLicensePlate` | String | Placa do veículo |
+| `status` | String | Status da OS (RECEIVED) |
+| `description` | String | Descrição da OS |
+| `totalPrice` | BigDecimal | Valor total calculado |
+| `items` | List | Lista de itens (serviços + recursos) |
+| `timestamp` | LocalDateTime | Data/hora do evento |
+
+#### Estrutura de cada item
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `type` | String | `SERVICE` ou `RESOURCE` |
+| `itemCode` | Long | ID do serviço ou recurso |
+| `description` | String | Nome do serviço ou recurso |
+| `quantity` | Integer | Quantidade |
+| `unitPrice` | BigDecimal | Preço unitário |
+
+#### Exemplo
+
+```json
+{
+  "eventType": "ORDER_CREATED",
+  "orderId": 123,
+  "serviceOrderId": "123",
+  "customerId": 456,
+  "customerName": "João Silva",
+  "vehicleId": 789,
+  "vehicleLicensePlate": "ABC1D23",
+  "status": "RECEIVED",
+  "description": "Troca de pastilha de freio",
+  "totalPrice": 470.00,
+  "items": [
+    { "type": "SERVICE", "itemCode": 301, "description": "Diagnóstico de freios", "quantity": 1, "unitPrice": 150.00 },
+    { "type": "RESOURCE", "itemCode": 401, "description": "Pastilha de freio", "quantity": 1, "unitPrice": 320.00 }
+  ],
+  "timestamp": "2026-02-12T15:04:05"
+}
+```
 
 ## Filas de entrada
 

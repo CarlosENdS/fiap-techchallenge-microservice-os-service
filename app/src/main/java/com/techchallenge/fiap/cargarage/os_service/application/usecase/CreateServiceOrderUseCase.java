@@ -105,6 +105,36 @@ public class CreateServiceOrderUseCase {
         // Publish event for Saga/integration
         eventPublisher.publishOrderCreated(savedOrder);
 
+        // Auto-advance: when the order is created with a complete quote
+        // (services/resources with prices), it is already diagnosed.
+        // Automatically transition RECEIVED → IN_DIAGNOSIS → WAITING_APPROVAL
+        // so the Saga can proceed without manual intervention.
+        if (hasCompleteQuote(services, resources, total)) {
+            LocalDateTime advanceTime = LocalDateTime.now();
+
+            ServiceOrder inDiagnosis = savedOrder.withStatusUpdated(
+                    ServiceOrderStatus.inDiagnosis(), advanceTime);
+            serviceOrderGateway.update(inDiagnosis);
+
+            ServiceOrder waitingApproval = inDiagnosis.withStatusUpdated(
+                    ServiceOrderStatus.waitingApproval(), advanceTime);
+            savedOrder = serviceOrderGateway.update(waitingApproval);
+
+            eventPublisher.publishOrderWaitingApproval(savedOrder);
+        }
+
         return savedOrder;
+    }
+
+    /**
+     * A quote is considered complete when there is at least one service or resource
+     * and the total price is greater than zero (i.e., items have prices assigned).
+     */
+    private boolean hasCompleteQuote(List<ServiceOrderItem> services,
+            List<ServiceOrderResource> resources,
+            BigDecimal total) {
+        boolean hasItems = (services != null && !services.isEmpty())
+                || (resources != null && !resources.isEmpty());
+        return hasItems && total.compareTo(BigDecimal.ZERO) > 0;
     }
 }
