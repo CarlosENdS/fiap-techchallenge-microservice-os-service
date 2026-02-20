@@ -410,8 +410,8 @@ class SqsEventPublisherTest {
             assertTrue(body.contains("200"));
             assertTrue(body.contains("SERVICE"));
             assertTrue(body.contains("RESOURCE"));
-            assertTrue(body.contains("Brake Inspection"));
-            assertTrue(body.contains("Brake Pads"));
+            assertTrue(body.contains("Full brake check"));
+            assertTrue(body.contains("Front brake pads set"));
             assertTrue(body.contains("470.00"));
             // Standard queue should not have FIFO attributes
             assertNull(billingRequest.messageGroupId());
