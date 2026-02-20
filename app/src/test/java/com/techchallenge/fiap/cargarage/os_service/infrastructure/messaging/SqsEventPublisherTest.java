@@ -19,6 +19,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.techchallenge.fiap.cargarage.os_service.application.entity.ServiceOrder;
+import com.techchallenge.fiap.cargarage.os_service.application.entity.ServiceOrderItem;
+import com.techchallenge.fiap.cargarage.os_service.application.entity.ServiceOrderResource;
 import com.techchallenge.fiap.cargarage.os_service.application.entity.ServiceOrderStatus;
 
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -35,6 +37,7 @@ class SqsEventPublisherTest {
     private SqsEventPublisher sqsEventPublisher;
 
     private static final String TEST_QUEUE_URL = "http://localhost:4566/000000000000/os-events.fifo";
+    private static final String TEST_BILLING_QUEUE_URL = "http://localhost:4566/000000000000/service-order-events";
 
     @BeforeEach
     void setUp() throws Exception {
@@ -44,6 +47,12 @@ class SqsEventPublisherTest {
         Field queueUrlField = SqsEventPublisher.class.getDeclaredField("osEventsQueueUrl");
         queueUrlField.setAccessible(true);
         queueUrlField.set(sqsEventPublisher, TEST_QUEUE_URL);
+    }
+
+    private void enableBillingQueue() throws Exception {
+        Field billingField = SqsEventPublisher.class.getDeclaredField("billingOrderEventsQueueUrl");
+        billingField.setAccessible(true);
+        billingField.set(sqsEventPublisher, TEST_BILLING_QUEUE_URL);
     }
 
     private ServiceOrder createTestOrder(Long id, ServiceOrderStatus status) {
@@ -62,6 +71,33 @@ class SqsEventPublisherTest {
                 .updatedAt(LocalDateTime.now())
                 .services(List.of())
                 .resources(List.of())
+                .build();
+    }
+
+    private ServiceOrder createTestOrderWithItems(Long id, ServiceOrderStatus status) {
+        ServiceOrderItem service = ServiceOrderItem.buildServiceOrderItem(
+                1L, 301L, "Brake Inspection", "Full brake check", 1,
+                new BigDecimal("150.00"), new BigDecimal("150.00"));
+
+        ServiceOrderResource resource = ServiceOrderResource.buildServiceOrderResource(
+                1L, 401L, "Brake Pads", "Front brake pads set", "PART", 1,
+                new BigDecimal("320.00"), new BigDecimal("320.00"));
+
+        return ServiceOrder.builder()
+                .id(id)
+                .customerId(1L)
+                .customerName("John Doe")
+                .vehicleId(2L)
+                .vehicleLicensePlate("ABC-1234")
+                .vehicleModel("Civic")
+                .vehicleBrand("Honda")
+                .description("Test service order with items")
+                .status(status)
+                .totalPrice(new BigDecimal("470.00"))
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .services(List.of(service))
+                .resources(List.of(resource))
                 .build();
     }
 
@@ -337,6 +373,183 @@ class SqsEventPublisherTest {
             SendMessageRequest request = captor.getValue();
             assertEquals("os-service-events", request.messageGroupId());
             assertTrue(request.messageDeduplicationId().startsWith("110-ORDER_CREATED-"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Billing Queue Tests")
+    class BillingQueueTests {
+
+        @Test
+        @DisplayName("Should publish ORDER_CREATED to billing queue with items")
+        void shouldPublishToBillingQueueWithItems() throws Exception {
+            // Arrange
+            enableBillingQueue();
+            ServiceOrder order = createTestOrderWithItems(200L, ServiceOrderStatus.received());
+            when(sqsClient.sendMessage(any(SendMessageRequest.class)))
+                    .thenReturn(SendMessageResponse.builder().messageId("msg-200").build());
+
+            // Act
+            sqsEventPublisher.publishOrderCreated(order);
+
+            // Assert - should send 2 messages: FIFO queue + billing standard queue
+            ArgumentCaptor<SendMessageRequest> captor = ArgumentCaptor.forClass(SendMessageRequest.class);
+            verify(sqsClient, times(2)).sendMessage(captor.capture());
+
+            List<SendMessageRequest> requests = captor.getAllValues();
+
+            // First call = FIFO queue
+            assertEquals(TEST_QUEUE_URL, requests.get(0).queueUrl());
+
+            // Second call = billing standard queue
+            SendMessageRequest billingRequest = requests.get(1);
+            assertEquals(TEST_BILLING_QUEUE_URL, billingRequest.queueUrl());
+            String body = billingRequest.messageBody();
+            assertTrue(body.contains("ORDER_CREATED"));
+            assertTrue(body.contains("\"serviceOrderId\":\"200\""));
+            assertTrue(body.contains("SERVICE"));
+            assertTrue(body.contains("RESOURCE"));
+            assertTrue(body.contains("Brake Inspection"));
+            assertTrue(body.contains("Brake Pads"));
+            assertTrue(body.contains("470.00"));
+            // Standard queue should not have FIFO attributes
+            assertNull(billingRequest.messageGroupId());
+        }
+
+        @Test
+        @DisplayName("Should skip billing queue when URL is not configured")
+        void shouldSkipBillingQueueWhenNotConfigured() {
+            // Arrange - billing queue URL is not set (default in setUp)
+            ServiceOrder order = createTestOrder(201L, ServiceOrderStatus.received());
+            when(sqsClient.sendMessage(any(SendMessageRequest.class)))
+                    .thenReturn(SendMessageResponse.builder().messageId("msg-201").build());
+
+            // Act
+            sqsEventPublisher.publishOrderCreated(order);
+
+            // Assert - only 1 message to FIFO queue, billing skipped
+            verify(sqsClient, times(1)).sendMessage(any(SendMessageRequest.class));
+        }
+
+        @Test
+        @DisplayName("Should skip billing queue when URL is blank")
+        void shouldSkipBillingQueueWhenBlank() throws Exception {
+            // Arrange
+            Field billingField = SqsEventPublisher.class.getDeclaredField("billingOrderEventsQueueUrl");
+            billingField.setAccessible(true);
+            billingField.set(sqsEventPublisher, "   ");
+
+            ServiceOrder order = createTestOrder(202L, ServiceOrderStatus.received());
+            when(sqsClient.sendMessage(any(SendMessageRequest.class)))
+                    .thenReturn(SendMessageResponse.builder().messageId("msg-202").build());
+
+            // Act
+            sqsEventPublisher.publishOrderCreated(order);
+
+            // Assert - only FIFO message
+            verify(sqsClient, times(1)).sendMessage(any(SendMessageRequest.class));
+        }
+
+        @Test
+        @DisplayName("Should handle billing queue exception gracefully without failing main event")
+        void shouldHandleBillingQueueExceptionGracefully() throws Exception {
+            // Arrange
+            enableBillingQueue();
+            ServiceOrder order = createTestOrderWithItems(203L, ServiceOrderStatus.received());
+
+            // First call (FIFO) succeeds, second call (billing) fails
+            when(sqsClient.sendMessage(any(SendMessageRequest.class)))
+                    .thenReturn(SendMessageResponse.builder().messageId("msg-203").build())
+                    .thenThrow(SqsException.builder().message("Billing queue error").build());
+
+            // Act - should NOT throw despite billing queue failure
+            assertDoesNotThrow(() -> sqsEventPublisher.publishOrderCreated(order));
+
+            // Assert - both calls were attempted
+            verify(sqsClient, times(2)).sendMessage(any(SendMessageRequest.class));
+        }
+
+        @Test
+        @DisplayName("Should include null-safe price and totalPrice in billing payload")
+        void shouldHandleNullTotalPriceInBillingPayload() throws Exception {
+            // Arrange
+            enableBillingQueue();
+            ServiceOrder order = ServiceOrder.builder()
+                    .id(204L)
+                    .customerId(1L)
+                    .customerName("Jane Doe")
+                    .vehicleId(2L)
+                    .vehicleLicensePlate("XYZ-9999")
+                    .vehicleModel("Corolla")
+                    .vehicleBrand("Toyota")
+                    .description("Null total price test")
+                    .status(ServiceOrderStatus.received())
+                    .totalPrice(null)
+                    .createdAt(LocalDateTime.now())
+                    .updatedAt(LocalDateTime.now())
+                    .services(null)
+                    .resources(null)
+                    .build();
+
+            when(sqsClient.sendMessage(any(SendMessageRequest.class)))
+                    .thenReturn(SendMessageResponse.builder().messageId("msg-204").build());
+
+            // Act
+            assertDoesNotThrow(() -> sqsEventPublisher.publishOrderCreated(order));
+
+            // Assert
+            ArgumentCaptor<SendMessageRequest> captor = ArgumentCaptor.forClass(SendMessageRequest.class);
+            verify(sqsClient, times(2)).sendMessage(captor.capture());
+
+            String billingBody = captor.getAllValues().get(1).messageBody();
+            assertTrue(billingBody.contains("\"totalPrice\":\"0\""));
+            assertTrue(billingBody.contains("\"items\":[]"));
+        }
+
+        @Test
+        @DisplayName("Should build items with null price as zero")
+        void shouldBuildItemsWithNullPriceAsZero() throws Exception {
+            // Arrange
+            enableBillingQueue();
+            ServiceOrderItem service = ServiceOrderItem.buildServiceOrderItem(
+                    1L, 100L, "Svc", "Svc Desc", 1,
+                    BigDecimal.ZERO, BigDecimal.ZERO);
+            ServiceOrderResource resource = ServiceOrderResource.buildServiceOrderResource(
+                    1L, 200L, "Res", "Res Desc", "PART", 1,
+                    BigDecimal.ZERO, BigDecimal.ZERO);
+
+            ServiceOrder order = ServiceOrder.builder()
+                    .id(205L)
+                    .customerId(1L)
+                    .customerName("Test")
+                    .vehicleId(2L)
+                    .vehicleLicensePlate("TST-0000")
+                    .vehicleModel("Test")
+                    .vehicleBrand("Test")
+                    .description("Zero price items")
+                    .status(ServiceOrderStatus.received())
+                    .totalPrice(BigDecimal.ZERO)
+                    .createdAt(LocalDateTime.now())
+                    .updatedAt(LocalDateTime.now())
+                    .services(List.of(service))
+                    .resources(List.of(resource))
+                    .build();
+
+            when(sqsClient.sendMessage(any(SendMessageRequest.class)))
+                    .thenReturn(SendMessageResponse.builder().messageId("msg-205").build());
+
+            // Act
+            sqsEventPublisher.publishOrderCreated(order);
+
+            // Assert
+            ArgumentCaptor<SendMessageRequest> captor = ArgumentCaptor.forClass(SendMessageRequest.class);
+            verify(sqsClient, times(2)).sendMessage(captor.capture());
+
+            String billingBody = captor.getAllValues().get(1).messageBody();
+            assertTrue(billingBody.contains("SERVICE"));
+            assertTrue(billingBody.contains("RESOURCE"));
+            assertTrue(billingBody.contains("\"itemCode\":\"100\""));
+            assertTrue(billingBody.contains("\"itemCode\":\"200\""));
         }
     }
 }
