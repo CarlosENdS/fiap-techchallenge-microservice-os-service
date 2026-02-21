@@ -144,6 +144,7 @@ jobs:
           echo "SQS_EXECUTION_COMPLETED=$(get_output 'sqs_execution_completed_queue_url')" >> $GITHUB_OUTPUT
           echo "SQS_PAYMENT_FAILED=$(get_output 'sqs_payment_failed_queue_url')" >> $GITHUB_OUTPUT
           echo "SQS_RESOURCE_UNAVAILABLE=$(get_output 'sqs_resource_unavailable_queue_url')" >> $GITHUB_OUTPUT
+          echo "SQS_BILLING_ORDER_EVENTS=$(get_output 'sqs_service_order_events_queue_url')" >> $GITHUB_OUTPUT
 
       - name: Update kubeconfig for EKS
         run: |
@@ -159,6 +160,7 @@ jobs:
           SQS_EXECUTION_COMPLETED: ${{ steps.parsed-outputs.outputs.SQS_EXECUTION_COMPLETED }}
           SQS_PAYMENT_FAILED: ${{ steps.parsed-outputs.outputs.SQS_PAYMENT_FAILED }}
           SQS_RESOURCE_UNAVAILABLE: ${{ steps.parsed-outputs.outputs.SQS_RESOURCE_UNAVAILABLE }}
+          SQS_BILLING_ORDER_EVENTS: ${{ steps.parsed-outputs.outputs.SQS_BILLING_ORDER_EVENTS }}
           IRSA_ROLE_ARN: ${{ steps.parsed-outputs.outputs.IRSA_ROLE_ARN }}
           IMAGE_URI: ${{ needs.build-and-push.outputs.image-uri }}
         run: |
@@ -175,6 +177,7 @@ jobs:
           sed -i "s|__SQS_EXECUTION_COMPLETED_QUEUE__|${SQS_EXECUTION_COMPLETED}|g" k8s/configmap.yaml
           sed -i "s|__SQS_PAYMENT_FAILED_QUEUE__|${SQS_PAYMENT_FAILED}|g" k8s/configmap.yaml
           sed -i "s|__SQS_RESOURCE_UNAVAILABLE_QUEUE__|${SQS_RESOURCE_UNAVAILABLE}|g" k8s/configmap.yaml
+          sed -i "s|__SQS_BILLING_ORDER_EVENTS_URL__|${SQS_BILLING_ORDER_EVENTS}|g" k8s/configmap.yaml
 
           # Substitute values in service-account.yaml
           sed -i "s|__IRSA_ROLE_ARN__|${IRSA_ROLE_ARN}|g" k8s/service-account.yaml
